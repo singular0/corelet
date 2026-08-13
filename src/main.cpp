@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 
 #include "protocol/ble_transport.h"
 #include "protocol/transport.h"
@@ -12,6 +13,7 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName(QStringLiteral("umeshcore-app"));
     QApplication::setOrganizationName(QStringLiteral("umeshcore"));
     QApplication::setApplicationVersion(QStringLiteral(UMESHCORE_APP_VERSION));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(

@@ -79,8 +79,12 @@ if(APPLE)
     set(MACOSX_BUNDLE_BUNDLE_NAME umeshcore-app)
     set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+    set_source_files_properties(assets/umeshcore-app.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(umeshcore-app PRIVATE assets/umeshcore-app.icns)
     set_target_properties(umeshcore-app PROPERTIES
         MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_ICON_FILE umeshcore-app.icns
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/etc/Info.plist.in)
 endif()
 
@@ -89,5 +93,7 @@ install(TARGETS umeshcore-app
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE DESTINATION .)
 install(FILES etc/umeshcore-app.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+install(FILES assets/umeshcore-app.png
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps)
 
 message(STATUS "umeshcore-app ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
