@@ -47,8 +47,6 @@ private:
         QString preview;
     };
 
-    QString tooltipFor(const Channel& ch) const;
-
     QVector<Channel> channels_;
     QHash<int, int> unread_;
     QHash<int, LastMessage> last_;

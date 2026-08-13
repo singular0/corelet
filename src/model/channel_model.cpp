@@ -1,7 +1,5 @@
 #include "model/channel_model.h"
 
-#include <QLocale>
-
 namespace model {
 
 ChannelModel::ChannelModel(QObject* parent) : QAbstractListModel(parent) {}
@@ -22,27 +20,8 @@ QVariant ChannelModel::data(const QModelIndex& index, int role) const {
         case TypeRole: return int(ch.type);
         case LastActivityRole: return last_.value(ch.index).when;
         case PreviewRole: return last_.value(ch.index).preview;
-        case Qt::ToolTipRole: return tooltipFor(ch);
         default: return {};
     }
-}
-
-QString ChannelModel::tooltipFor(const Channel& ch) const {
-    // The row is icon, name and a time; the tooltip is where what the icon
-    // means and the full date live, since neither fits a 210px sidebar.
-    QString kind;
-    switch (ch.type) {
-        case ChannelType::Public: kind = QStringLiteral("public channel"); break;
-        case ChannelType::Hashtag: kind = QStringLiteral("hashtag channel"); break;
-        case ChannelType::Private: kind = QStringLiteral("private channel"); break;
-    }
-
-    QString text = QStringLiteral("%1 — %2 (slot %3)").arg(ch.displayName(), kind).arg(ch.index);
-    const QDateTime when = last_.value(ch.index).when;
-    if (when.isValid())
-        text += QStringLiteral("\nLast message %1")
-                    .arg(QLocale().toString(when, QLocale::ShortFormat));
-    return text;
 }
 
 void ChannelModel::setChannels(const QVector<Channel>& channels) {
@@ -78,8 +57,7 @@ void ChannelModel::setLastMessage(int channelIndex, const Message& msg) {
 
     const int row = rowForIndex(channelIndex);
     if (row >= 0)
-        Q_EMIT dataChanged(index(row), index(row),
-                           {LastActivityRole, PreviewRole, Qt::ToolTipRole});
+        Q_EMIT dataChanged(index(row), index(row), {LastActivityRole, PreviewRole});
 }
 
 void ChannelModel::bumpUnread(int channelIndex) {
