@@ -22,11 +22,29 @@ QFont subFont(const QFont& base) {
     return f;
 }
 
-ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color) {
+ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
+                    const QString& iconName = {}, QLabel** iconOut = nullptr) {
+    auto* row = new QWidget;
+    auto* rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(5);
+
+    if (!iconName.isEmpty()) {
+        constexpr int IconSize = 14;
+        auto* icon = new QLabel;
+        icon->setFixedSize(IconSize, IconSize);
+        icon->setPixmap(icons::tinted(iconName, IconSize, theme::TextMuted,
+                                      layout->parentWidget()->devicePixelRatioF()));
+        icon->setAlignment(Qt::AlignCenter);
+        rowLayout->addWidget(icon);
+        if (iconOut) *iconOut = icon;
+    }
+
     auto* label = new ElidedLabel;
     label->setFont(font);
     label->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
-    layout->addWidget(label);
+    rowLayout->addWidget(label, 1);
+    layout->addWidget(row);
     return label;
 }
 
@@ -74,16 +92,15 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     QFont nameFont = font();
     nameFont.setBold(true);
 
-    // Rows that can vanish go on top: the pane is anchored to the bottom of the
-    // window, so the target and the link state keep their place on screen when
-    // the device's answer arrives and pushes the rest upwards.
-    name_ = addRow(detailsLayout, nameFont, theme::Text);
-    radio_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
-    target_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
+    name_ = addRow(detailsLayout, nameFont, theme::Text, QStringLiteral("radio-tower"));
+    target_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
+                     QStringLiteral("server"), &targetIcon_);
+    battery_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
+                      QStringLiteral("battery-medium"));
     status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
 
-    name_->hide();
-    radio_->hide();
+    name_->setFullText(QStringLiteral("Node unavailable"));
+    battery_->setFullText(QStringLiteral("Battery unavailable"));
 
     layout->addWidget(header);
     layout->addWidget(details);
@@ -96,20 +113,21 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     });
 }
 
-void NodePane::setTarget(const QString& label) {
-    target_->setFullText(label);
+void NodePane::setTarget(const proto::ConnectTarget& target) {
+    constexpr int IconSize = 14;
+    target_->setFullText(target.label());
+    const QString icon = target.kind == proto::ConnectTarget::Kind::Ble
+                             ? QStringLiteral("bluetooth")
+                             : QStringLiteral("server");
+    targetIcon_->setPixmap(
+        icons::tinted(icon, IconSize, theme::TextMuted, devicePixelRatioF()));
 }
 
 void NodePane::setDevice(const proto::CompanionClient::DeviceInfo& info) {
-    name_->setFullText(info.name);
-    name_->setVisible(!info.name.isEmpty());
-
-    // Frequency and spreading factor decide who can hear this node at all,
-    // which is what makes them worth carrying in a chat window; the rest of the
-    // radio settings are the daemon's business.
-    radio_->setFullText(
-        QStringLiteral("%1 MHz · SF%2").arg(info.freqMhz, 0, 'f', 3).arg(info.sf));
-    radio_->setVisible(info.freqMhz > 0);
+    name_->setFullText(info.name.isEmpty() ? QStringLiteral("Node unavailable") : info.name);
+    battery_->setFullText(info.batteryPercent < 0
+                              ? QStringLiteral("Battery unavailable")
+                              : QStringLiteral("%1%").arg(info.batteryPercent));
 }
 
 void NodePane::setConnection(const QString& text, const QColor& color, bool active) {

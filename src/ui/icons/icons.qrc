@@ -12,5 +12,9 @@
         <file>refresh-cw.svg</file>
         <file>plug.svg</file>
         <file>unplug.svg</file>
+        <file>radio-tower.svg</file>
+        <file>bluetooth.svg</file>
+        <file>server.svg</file>
+        <file>battery-medium.svg</file>
     </qresource>
 </RCC>

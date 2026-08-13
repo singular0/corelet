@@ -5,6 +5,7 @@
 #include "protocol/client.h"
 
 class ElidedLabel;
+class QLabel;
 class QToolButton;
 
 // The foot of the sidebar: which node this app is talking to, and how that is
@@ -17,10 +18,9 @@ class NodePane : public QWidget {
 public:
     explicit NodePane(QWidget* parent = nullptr);
 
-    // Where the link points: a host:port, or a BLE device name.
-    void setTarget(const QString& label);
-    // What the far end says it is. Empty fields stay hidden rather than showing
-    // a placeholder, so the pane is only as tall as it has something to say.
+    // Where the link points, including which icon distinguishes TCP from BLE.
+    void setTarget(const proto::ConnectTarget& target);
+    // What the far end says it is, including the last battery reading.
     void setDevice(const proto::CompanionClient::DeviceInfo& info);
     // Already-worded link state, coloured by the caller: MainWindow owns the
     // mapping from client state to what the user should read. `active` includes
@@ -38,9 +38,10 @@ private:
     void updateConnectionAction(bool active);
 
     QToolButton* connectionButton_ = nullptr;
+    QLabel* targetIcon_ = nullptr;
     ElidedLabel* name_ = nullptr;
-    ElidedLabel* radio_ = nullptr;
     ElidedLabel* target_ = nullptr;
+    ElidedLabel* battery_ = nullptr;
     ElidedLabel* status_ = nullptr;
     bool connectionActive_ = false;
 };

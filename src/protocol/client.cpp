@@ -17,6 +17,18 @@ constexpr int ReplyTimeoutMs = 10000;
 
 constexpr int ReconnectMinMs = 1000;
 constexpr int ReconnectMaxMs = 15000;
+constexpr int BatteryPollMs = 60000;
+
+// Companion firmware reports a single-cell battery voltage, while the pane
+// needs a percentage. Use a deliberately simple linear estimate: a discharged
+// cell is 3.0 V and a full one is 4.2 V. Values outside that range are clamped,
+// and zero is the protocol's "unavailable" value.
+int batteryPercent(quint16 millivolts) {
+    constexpr int EmptyMv = 3000;
+    constexpr int FullMv = 4200;
+    if (millivolts == 0) return -1;
+    return std::clamp((int(millivolts) - EmptyMv) * 100 / (FullMv - EmptyMv), 0, 100);
+}
 
 // Timestamps arrive from other nodes' clocks, which on a mesh device may be
 // unset. Anything before 2020 is not a real message time, so fall back to
@@ -53,6 +65,10 @@ CompanionClient::CompanionClient(QObject* parent) : QObject(parent) {
     reconnectTimer_ = new QTimer(this);
     reconnectTimer_->setSingleShot(true);
     connect(reconnectTimer_, &QTimer::timeout, this, &CompanionClient::reconnect);
+
+    batteryTimer_ = new QTimer(this);
+    batteryTimer_->setInterval(BatteryPollMs);
+    connect(batteryTimer_, &QTimer::timeout, this, &CompanionClient::requestBattery);
 }
 
 CompanionClient::~CompanionClient() = default;
@@ -109,6 +125,7 @@ void CompanionClient::resetConnection() {
     syncPending_ = false;
     channelsOutstanding_ = 0;
     replyTimer_->stop();
+    batteryTimer_->stop();
 
     // Last, and against an already-clean queue: an abort handler reaches the UI,
     // which may well answer by starting another command.
@@ -300,10 +317,30 @@ void CompanionClient::requestChannel(int index) {
             Q_EMIT channelsChanged(channels_);
             backoffMs_ = 0;  // a full handshake proves the link is good
             setState(State::Ready);
+            requestBattery();
+            batteryTimer_->start();
             // Anything received while no app was attached is still queued in
             // the daemon; collect it before going idle.
             requestSync();
         }
+        return true;
+    });
+}
+
+void CompanionClient::requestBattery() {
+    if (state_ != State::Ready) return;
+
+    Writer w(CmdGetBatteryVoltage);
+    enqueue(w.bytes(), [this](quint8 code, Reader& r) {
+        if (code != RespBatteryVoltage) return true;
+
+        const quint16 millivolts = r.u16();
+        if (!r.ok()) return true;
+        const int percent = batteryPercent(millivolts);
+        if (percent == device_.batteryPercent) return true;
+
+        device_.batteryPercent = percent;
+        Q_EMIT deviceInfoChanged(device_);
         return true;
     });
 }

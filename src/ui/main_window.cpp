@@ -193,7 +193,7 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     updateChannelActions();
 
     target_ = target;
-    nodePane_->setTarget(target.label());
+    nodePane_->setTarget(target);
     client_->start(proto::createTransport(target));
 }
 

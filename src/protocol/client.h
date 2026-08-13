@@ -40,6 +40,10 @@ public:
         int sf = 0;
         int cr = 0;
         int txPowerDbm = 0;
+        // GET_BATTERY_VOLTAGE supplies millivolts rather than charge state. The
+        // client exposes the percentage the UI needs; -1 means the far end has
+        // no battery reading.
+        int batteryPercent = -1;
     };
 
     explicit CompanionClient(QObject* parent = nullptr);
@@ -120,6 +124,7 @@ private:
     void handlePush(quint8 code, Reader& r);
 
     void beginHandshake();
+    void requestBattery();
     void requestChannel(int index);
     // Re-reads one slot after writing it and reports the write's outcome.
     // `cleared` says which write it was: the slot is expected to be occupied
@@ -136,6 +141,7 @@ private:
     Transport* transport_ = nullptr;
     QTimer* replyTimer_ = nullptr;
     QTimer* reconnectTimer_ = nullptr;
+    QTimer* batteryTimer_ = nullptr;
 
     bool running_ = false;
     int backoffMs_ = 0;
