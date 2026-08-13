@@ -80,7 +80,12 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
                                           : theme::TextMuted;
     const qreal dpr = option.widget ? option.widget->devicePixelRatioF() : 1.0;
     const QRect iconRect(r.left(), r.top() + (r.height() - IconSize) / 2, IconSize, IconSize);
-    p->drawPixmap(iconRect, icons::tinted(iconName(type), IconSize, iconColor, dpr));
+    p->setPen(Qt::NoPen);
+    p->setBrush(theme::IconBackground);
+    p->drawEllipse(iconRect);
+    const QRect glyphRect =
+        iconRect.adjusted(GlyphInset, GlyphInset, -GlyphInset, -GlyphInset);
+    p->drawPixmap(glyphRect, icons::tinted(iconName(type), glyphRect.width(), iconColor, dpr));
     r.setLeft(iconRect.right() + 10);
 
     const QFont nameF = nameFont(option.font);
