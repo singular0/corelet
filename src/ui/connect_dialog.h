@@ -6,7 +6,6 @@
 
 #include "protocol/transport.h"
 
-class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -55,7 +54,6 @@ private:
     QLineEdit* host_ = nullptr;
     QLineEdit* port_ = nullptr;
     QListWidget* devices_ = nullptr;
-    QCheckBox* showAll_ = nullptr;
     QPushButton* scanButton_ = nullptr;
     QPushButton* connectButton_ = nullptr;
     QLabel* bleStatus_ = nullptr;

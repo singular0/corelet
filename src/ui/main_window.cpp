@@ -466,7 +466,7 @@ void MainWindow::updateInputState() {
     sendButton_->setEnabled(canType && !input_->text().trimmed().isEmpty());
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
                                : ready ? QStringLiteral("Select a channel")
-                                       : QStringLiteral("Waiting for a connection…"));
+                                       : QStringLiteral("Waiting for a connection..."));
 }
 
 // ---------------------------------------------------------------------------

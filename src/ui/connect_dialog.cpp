@@ -1,7 +1,6 @@
 #include "ui/connect_dialog.h"
 
 #include <QBluetoothDeviceDiscoveryAgent>
-#include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -91,7 +90,6 @@ void ConnectDialog::buildUi() {
     bleStatus_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
     scanButton_ = new QPushButton(QStringLiteral("Scan"));
-    showAll_ = new QCheckBox(QStringLiteral("Show all Bluetooth devices"));
 
     auto* bleTop = new QHBoxLayout;
     bleTop->addWidget(bleStatus_, 1);
@@ -99,7 +97,6 @@ void ConnectDialog::buildUi() {
 
     bleLayout->addLayout(bleTop);
     bleLayout->addWidget(devices_, 1);
-    bleLayout->addWidget(showAll_);
 
     tabs_->addTab(tcpTab, QStringLiteral("Network"));
     tabs_->addTab(bleTab, QStringLiteral("Bluetooth"));
@@ -116,7 +113,6 @@ void ConnectDialog::buildUi() {
 
     connect(tabs_, &QTabWidget::currentChanged, this, &ConnectDialog::onTabChanged);
     connect(scanButton_, &QPushButton::clicked, this, &ConnectDialog::scanWhenPermitted);
-    connect(showAll_, &QCheckBox::toggled, this, [this] { rebuildDeviceList(); });
     connect(devices_, &QListWidget::itemSelectionChanged, this,
             &ConnectDialog::updateConnectButton);
     connect(devices_, &QListWidget::itemDoubleClicked, this, &ConnectDialog::onAccepted);
@@ -141,7 +137,7 @@ void ConnectDialog::scanWhenPermitted() {
     permission.setCommunicationModes(QBluetoothPermission::Access);
     switch (qApp->checkPermission(permission)) {
         case Qt::PermissionStatus::Undetermined:
-            setBleStatus(QStringLiteral("waiting for Bluetooth permission…"));
+            setBleStatus(QStringLiteral("Waiting for Bluetooth permission..."));
             qApp->requestPermission(permission, this, [this](const QPermission& result) {
                 if (result.status() == Qt::PermissionStatus::Granted)
                     startScan();
@@ -195,8 +191,15 @@ void ConnectDialog::startScan() {
 
     connect(agent_, &QBluetoothDeviceDiscoveryAgent::finished, this, [this] {
         scanButton_->setEnabled(true);
-        setBleStatus(devices_->count() == 0 ? QStringLiteral("no devices found")
-                                            : QStringLiteral("scan finished"));
+        // Counted from the scan results, not from the list: the remembered
+        // device is listed without having been seen and must not inflate this.
+        int found = 0;
+        for (const QBluetoothDeviceInfo& info : found_)
+            if (proto::looksLikeMeshCore(info)) found++;
+        setBleStatus(found == 0 ? QStringLiteral("No devices found")
+                                : QStringLiteral("%1 device%2 found")
+                                      .arg(found)
+                                      .arg(found == 1 ? QString() : QStringLiteral("s")));
     });
 
     connect(agent_, &QBluetoothDeviceDiscoveryAgent::errorOccurred, this,
@@ -209,7 +212,7 @@ void ConnectDialog::startScan() {
             });
 
     scanButton_->setEnabled(false);
-    setBleStatus(QStringLiteral("scanning…"));
+    setBleStatus(QStringLiteral("Scanning..."));
     agent_->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
 }
 
@@ -244,7 +247,7 @@ void ConnectDialog::rebuildDeviceList() {
         addDevice(saved_.bleId, saved_.bleName, QStringLiteral("   (last used)"));
 
     for (const QBluetoothDeviceInfo& info : found_) {
-        if (!showAll_->isChecked() && !proto::looksLikeMeshCore(info)) continue;
+        if (!proto::looksLikeMeshCore(info)) continue;
         addDevice(proto::bleDeviceId(info), info.name(), {});
     }
 

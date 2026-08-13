@@ -108,6 +108,7 @@ for permission to commit to the default branch.
 - Warnings are `-Wall -Wextra -Wpedantic`; keep new code clean.
 - Files are named in `snake_case` (`chat_model.cpp`, not `chatmodel.cpp`) throughout.
 - Members are trailing-underscore, 4-space indent, ~100 columns.
+- User-visible strings use ASCII `...`, never the Unicode ellipsis `…`.
 - Comments here explain *why* a thing is the way it is — a wire quirk, a uConsole constraint. Match
   that register rather than narrating what the code does.
 
