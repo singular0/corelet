@@ -97,10 +97,17 @@ Violating any of these produces bugs that only show up against a real device:
   `channelCache` (index/name/type, unit-separator joined — names only, keys stay in the daemon) and
   the `connection/*` target.
 
+## Git
+
+Commit straight to `main` unless asked for a branch. Don't create a feature branch, and don't ask
+for permission to commit to the default branch.
+
 ## Conventions
 
 - `QT_NO_KEYWORDS` is defined: use `Q_SIGNALS` / `Q_SLOTS` / `Q_EMIT`, never the lowercase macros.
 - Warnings are `-Wall -Wextra -Wpedantic`; keep new code clean.
+- New files are named in `snake_case` (`chat_model.cpp`, not `chatmodel.cpp`). The files committed
+  so far use Qt's flat-lowercase style; leave them alone unless a rename is asked for.
 - Members are trailing-underscore, 4-space indent, ~100 columns.
 - Comments here explain *why* a thing is the way it is — a wire quirk, a uConsole constraint. Match
   that register rather than narrating what the code does.
