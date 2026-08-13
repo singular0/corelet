@@ -295,6 +295,82 @@ void CompanionClient::requestChannel(int index) {
 }
 
 // ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
+
+void CompanionClient::setChannel(int channelIndex, const QString& name,
+                                 const QByteArray& secret) {
+    if (state_ != State::Ready) {
+        Q_EMIT channelSaveResult(channelIndex, false, QStringLiteral("not connected"));
+        return;
+    }
+    // padded() would quietly stretch or clip a wrong-sized key into a different
+    // channel, so refuse it here instead of joining something nobody is on.
+    if (secret.size() != ChannelSecretSize || channelIndex < 0 || channelIndex >= MaxChannels) {
+        Q_EMIT channelSaveResult(channelIndex, false, QStringLiteral("invalid channel"));
+        return;
+    }
+
+    // index(1) name(32) secret(16)
+    Writer w(CmdSetChannel);
+    w.u8(quint8(channelIndex))
+        .padded(name.toUtf8(), ChannelNameField)
+        .padded(secret, ChannelSecretSize);
+
+    enqueue(w.bytes(), [this, channelIndex](quint8 code, Reader& r) {
+        if (code == RespOk) {
+            readBackChannel(channelIndex);
+        } else {
+            Q_EMIT channelSaveResult(
+                channelIndex, false,
+                code == RespErr ? errorText(r.u8()) : QStringLiteral("unexpected reply"));
+        }
+        return true;
+    });
+}
+
+void CompanionClient::readBackChannel(int index) {
+    // The store truncates a long name to its 32-byte field, so what the app
+    // shows comes from the slot rather than from what it asked for.
+    Writer w(CmdGetChannel);
+    w.u8(quint8(index));
+    enqueue(w.bytes(), [this, index](quint8 code, Reader& r) {
+        if (code != RespChannelInfo) {
+            Q_EMIT channelSaveResult(
+                index, false, QStringLiteral("saved, but the slot could not be read back"));
+            return true;
+        }
+
+        model::Channel ch;
+        ch.index = r.u8();
+        ch.name = r.fixedString(ChannelNameField);
+        ch.secret = r.take(ChannelSecretSize);
+        ch.type = model::Channel::classify(ch.name, ch.secret);
+        if (!r.ok() || !ch.configured()) {
+            Q_EMIT channelSaveResult(index, false, QStringLiteral("the slot is still empty"));
+            return true;
+        }
+
+        // Slots are the identity: writing an occupied one replaces it rather
+        // than adding a second row for the same channel.
+        auto it = std::find_if(channels_.begin(), channels_.end(),
+                               [&](const model::Channel& c) { return c.index == ch.index; });
+        if (it != channels_.end())
+            *it = ch;
+        else
+            channels_.append(ch);
+        std::sort(channels_.begin(), channels_.end(),
+                  [](const model::Channel& a, const model::Channel& b) {
+                      return a.index < b.index;
+                  });
+
+        Q_EMIT channelsChanged(channels_);
+        Q_EMIT channelSaveResult(ch.index, true, {});
+        return true;
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 

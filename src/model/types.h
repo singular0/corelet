@@ -7,6 +7,24 @@
 
 namespace model {
 
+// Mirrors the companion protocol's channel secret field. Kept here rather than
+// pulled from protocol.h so the value types stay independent of the wire code.
+inline constexpr int ChannelSecretSize = 16;
+
+// The well-known key every node ships with in slot 0, so a fresh install can
+// talk to anyone. A constant, not a secret: joining it is knowing it.
+inline QByteArray publicChannelKey() {
+    return QByteArray::fromHex("8b3387e9c5cdea6ac9e5edbaa115cd72");
+}
+
+// A hashtag channel's key is derived from its name, which is what makes it
+// joinable by word of mouth. The '#' is part of the hashed name, so `#jokes`
+// and `jokes` are different channels.
+inline QByteArray hashtagChannelKey(const QString& name) {
+    return QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256)
+        .left(ChannelSecretSize);
+}
+
 // Nothing on the wire says what kind of channel a slot holds — GET_CHANNEL
 // answers with a name and a key and no more — so the kind is deduced from the
 // key itself, which is exactly how the daemon builds them.
@@ -28,7 +46,7 @@ struct Channel {
     ChannelType type = ChannelType::Private;
 
     bool configured() const {
-        if (secret.size() != proto_secret_size) return false;
+        if (secret.size() != ChannelSecretSize) return false;
         for (char c : secret)
             if (c != 0) return true;
         return false;
@@ -40,16 +58,11 @@ struct Channel {
     }
 
     static ChannelType classify(const QString& name, const QByteArray& secret) {
-        // Mirrors umeshcore's mesh::Channel: the public key is a constant every
-        // node ships with, and a hashtag key is SHA-256 over the name with the
-        // '#' included, truncated to the secret length.
-        static const QByteArray publicKey =
-            QByteArray::fromHex("8b3387e9c5cdea6ac9e5edbaa115cd72");
-        if (secret == publicKey) return ChannelType::Public;
-        const QByteArray fromName =
-            QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256)
-                .left(proto_secret_size);
-        if (secret == fromName) return ChannelType::Hashtag;
+        // Mirrors umeshcore's mesh::Channel: a key that can be re-derived from
+        // something public is a public channel, and anything else arrived by a
+        // route only the two ends know.
+        if (secret == publicChannelKey()) return ChannelType::Public;
+        if (secret == hashtagChannelKey(name)) return ChannelType::Hashtag;
         return ChannelType::Private;
     }
 
@@ -61,9 +74,6 @@ struct Channel {
             return ChannelType::Public;
         return ChannelType::Private;
     }
-
-private:
-    static constexpr int proto_secret_size = 16;
 };
 
 // Settings hand back plain ints, and an unrecognised one must not index off the

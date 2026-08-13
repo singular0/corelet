@@ -79,6 +79,16 @@ void apply(QApplication& app) {
         QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
         QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
         QLabel#header { padding: 6px 10px; border-bottom: 1px solid %5; }
+        /* Same strip as QLabel#header, but a container: the sidebar's title
+           shares it with the add-channel button. */
+        QWidget#sidebarHeader { border-bottom: 1px solid %5; }
+        /* Icon-only, and quiet until it is pointed at: the icon carries the
+           colour, so the button contributes no chrome of its own. */
+        QToolButton#iconButton {
+            background: transparent; border: none; border-radius: 3px; padding: 2px;
+        }
+        QToolButton#iconButton:hover { background: %4; }
+        QRadioButton { spacing: 6px; }
     )")
                           .arg(Background.name(), Text.name(), Sidebar.name(), Surface.name(),
                                Border.name(), Accent.name(), TextMuted.name()));

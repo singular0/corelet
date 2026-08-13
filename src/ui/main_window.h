@@ -10,6 +10,7 @@ class QLineEdit;
 class QListView;
 class QPushButton;
 class QSplitter;
+class QToolButton;
 class MessageDelegate;
 
 namespace model {
@@ -38,12 +39,14 @@ private Q_SLOTS:
     void onMessageReceived(const model::Message& msg);
     void onDirectMessageReceived(const model::Message& msg);
     void onSendResult(int channelIndex, const QString& text, bool ok, const QString& error);
+    void onChannelSaveResult(int channelIndex, bool ok, const QString& error);
 
 private:
     void buildUi();
     // Points the client at a target, replacing whatever it was talking to.
     void connectTo(const proto::ConnectTarget& target);
     void openConnectDialog();
+    void openAddChannelDialog();
     // Shows a channel list, from the device or from the offline cache.
     void showChannels(const QVector<model::Channel>& channels);
     void loadCachedChannels();
@@ -51,6 +54,9 @@ private:
     void showChannel(int channelIndex);
     void appendToView(const model::Message& msg);
     void updateInputState();
+    // Adding a channel is a write to the device, so it needs a live link and a
+    // free slot to write into.
+    void updateChannelActions();
     void updateHeader();
 
     proto::CompanionClient* client_ = nullptr;
@@ -63,6 +69,7 @@ private:
 
     QSplitter* splitter_ = nullptr;
     QListView* channelList_ = nullptr;
+    QToolButton* addChannelButton_ = nullptr;
     QListView* chatView_ = nullptr;
     QLabel* header_ = nullptr;
     QLineEdit* input_ = nullptr;

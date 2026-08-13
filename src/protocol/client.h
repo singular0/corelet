@@ -60,6 +60,10 @@ public:
 
     void sendChannelMessage(int channelIndex, const QString& text);
 
+    // Writes a channel into a slot, creating it or replacing what was there.
+    // The far end owns the keys, so this is the only way the app can add one.
+    void setChannel(int channelIndex, const QString& name, const QByteArray& secret);
+
 Q_SIGNALS:
     void stateChanged(State state, const QString& detail);
     void deviceInfoChanged(const DeviceInfo& info);
@@ -69,6 +73,9 @@ Q_SIGNALS:
     // from the daemon's inbox, so these must be captured rather than dropped.
     void directMessageReceived(const model::Message& msg);
     void sendResult(int channelIndex, const QString& text, bool ok, const QString& error);
+    // Answer to setChannel(). Emitted after channelsChanged() when it succeeds,
+    // so a listener can open the slot it just created.
+    void channelSaveResult(int channelIndex, bool ok, const QString& error);
 
 private Q_SLOTS:
     void onOpened();
@@ -93,6 +100,8 @@ private:
 
     void beginHandshake();
     void requestChannel(int index);
+    // Re-reads one slot after writing it and reports the write's outcome.
+    void readBackChannel(int index);
     void requestSync();
 
     void setState(State s, const QString& detail = {});

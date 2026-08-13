@@ -1,0 +1,324 @@
+#include "ui/add_channel_dialog.h"
+
+#include <QButtonGroup>
+#include <QClipboard>
+#include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QFormLayout>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QRandomGenerator>
+#include <QTabWidget>
+#include <QVBoxLayout>
+#include <cctype>
+#include <optional>
+
+#include "protocol/protocol.h"
+#include "ui/theme.h"
+
+namespace {
+
+constexpr int CreateTab = 0;
+constexpr int JoinTab = 1;
+constexpr int PublicTab = 2;
+
+// Lowest slot nothing occupies, or -1 when all eight are taken. Lowest rather
+// than next-highest because slots are sparse: clearing slot 3 and adding a
+// channel should reuse it instead of running out at the top.
+int firstFreeSlot(const QVector<model::Channel>& existing) {
+    for (int slot = 0; slot < proto::MaxChannels; slot++) {
+        bool taken = false;
+        for (const model::Channel& ch : existing)
+            if (ch.index == slot) taken = true;
+        if (!taken) return slot;
+    }
+    return -1;
+}
+
+// A channel key is a shared secret, so it comes from the system CSPRNG rather
+// than the default global generator, which is seeded for speed and not secrecy.
+QByteArray randomSecret() {
+    quint32 words[model::ChannelSecretSize / sizeof(quint32)];
+    QRandomGenerator::system()->fillRange(words);
+    return QByteArray(reinterpret_cast<const char*>(words), model::ChannelSecretSize);
+}
+
+bool isHex(const QByteArray& text) {
+    for (const char c : text)
+        if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+    return !text.isEmpty();
+}
+
+// Keys are passed around as hex — what the daemon writes in its state file —
+// and as base64, which is what the other MeshCore apps put on a QR code.
+// Accepting both beats making someone convert one to the other by hand.
+std::optional<QByteArray> parseSecret(const QString& text) {
+    QByteArray raw;
+    for (const QChar c : text)
+        if (!c.isSpace() && c != QLatin1Char(':')) raw.append(char(c.toLatin1()));
+
+    if (raw.size() == model::ChannelSecretSize * 2 && isHex(raw))
+        return QByteArray::fromHex(raw);
+
+    // Sixteen bytes encode to 24 characters with padding, which a copy out of a
+    // chat message often loses.
+    while (raw.size() % 4 != 0) raw.append('=');
+    // Decoding defaults to skipping anything it does not recognise, which would
+    // turn a typo into a plausible-looking key; insist on well-formed input.
+    for (const QByteArray::Base64Option alphabet :
+         {QByteArray::Base64Encoding, QByteArray::Base64UrlEncoding}) {
+        const QByteArray::FromBase64Result decoded = QByteArray::fromBase64Encoding(
+            raw, alphabet | QByteArray::AbortOnBase64DecodingErrors);
+        if (decoded && decoded.decoded.size() == model::ChannelSecretSize) return decoded.decoded;
+    }
+    return std::nullopt;
+}
+
+bool isZero(const QByteArray& secret) {
+    for (const char c : secret)
+        if (c != 0) return false;
+    return true;
+}
+
+QLabel* hint(const QString& text) {
+    auto* label = new QLabel(text);
+    label->setWordWrap(true);
+    label->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+    return label;
+}
+
+}  // namespace
+
+AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWidget* parent)
+    : QDialog(parent), existing_(existing), freeSlot_(firstFreeSlot(existing)) {
+    setWindowTitle(QStringLiteral("Add channel"));
+    buildUi();
+    regenerateKey();
+    updateOkButton();
+}
+
+bool AddChannelDialog::hasFreeSlot(const QVector<model::Channel>& existing) {
+    return firstFreeSlot(existing) >= 0;
+}
+
+void AddChannelDialog::buildUi() {
+    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    tabs_ = new QTabWidget;
+
+    // --- new private channel ------------------------------------------------
+    auto* createTab = new QWidget;
+    auto* createLayout = new QFormLayout(createTab);
+    createLayout->setContentsMargins(12, 10, 12, 10);
+    createLayout->setSpacing(6);
+
+    createName_ = new QLineEdit;
+    createName_->setPlaceholderText(QStringLiteral("Kitchen table"));
+    createName_->setMaxLength(proto::ChannelNameField);
+
+    createKey_ = new QLineEdit;
+    createKey_->setReadOnly(true);
+    createKey_->setFont(mono);
+
+    auto* regenerate = new QPushButton(QStringLiteral("New key"));
+    regenerate->setAutoDefault(false);
+    auto* copy = new QPushButton(QStringLiteral("Copy"));
+    copy->setAutoDefault(false);
+
+    auto* keyRow = new QHBoxLayout;
+    keyRow->setSpacing(6);
+    keyRow->addWidget(createKey_, 1);
+    keyRow->addWidget(regenerate);
+    keyRow->addWidget(copy);
+
+    createLayout->addRow(QStringLiteral("Name"), createName_);
+    createLayout->addRow(QStringLiteral("Key"), keyRow);
+    createLayout->addRow(hint(QStringLiteral(
+        "The key is the channel: anyone holding it can read and post, and nothing else is "
+        "asked for. Hand it over in person or over something already private. The name is "
+        "yours alone — it is never transmitted.")));
+
+    // --- join with a key ----------------------------------------------------
+    auto* joinTab = new QWidget;
+    auto* joinLayout = new QFormLayout(joinTab);
+    joinLayout->setContentsMargins(12, 10, 12, 10);
+    joinLayout->setSpacing(6);
+
+    joinName_ = new QLineEdit;
+    joinName_->setPlaceholderText(QStringLiteral("Kitchen table"));
+    joinName_->setMaxLength(proto::ChannelNameField);
+
+    joinKey_ = new QLineEdit;
+    joinKey_->setPlaceholderText(QStringLiteral("32 hex characters, or base64"));
+    joinKey_->setFont(mono);
+
+    joinLayout->addRow(QStringLiteral("Name"), joinName_);
+    joinLayout->addRow(QStringLiteral("Key"), joinKey_);
+    joinLayout->addRow(hint(QStringLiteral(
+        "Paste the key you were given. Only the key has to match the people you are joining "
+        "— call the channel whatever you like.")));
+
+    // --- public and hashtag -------------------------------------------------
+    auto* publicTab = new QWidget;
+    auto* publicLayout = new QVBoxLayout(publicTab);
+    publicLayout->setContentsMargins(12, 10, 12, 10);
+    publicLayout->setSpacing(6);
+
+    publicWellKnown_ = new QRadioButton(QStringLiteral("MeshCore Public"));
+    publicHashtag_ = new QRadioButton(QStringLiteral("Hashtag"));
+    publicHashtag_->setChecked(true);
+
+    auto* group = new QButtonGroup(this);
+    group->addButton(publicWellKnown_);
+    group->addButton(publicHashtag_);
+
+    hashtag_ = new QLineEdit;
+    hashtag_->setPlaceholderText(QStringLiteral("#jokes"));
+    hashtag_->setMaxLength(proto::ChannelNameField);
+
+    auto* hashtagRow = new QHBoxLayout;
+    hashtagRow->setSpacing(6);
+    hashtagRow->addWidget(publicHashtag_);
+    hashtagRow->addWidget(hashtag_, 1);
+
+    publicLayout->addWidget(publicWellKnown_);
+    publicLayout->addLayout(hashtagRow);
+    publicLayout->addWidget(hint(QStringLiteral(
+        "Neither of these is private. A hashtag's key is derived from its name, so knowing "
+        "the name is joining the channel; the Public channel ships with every node.")));
+    publicLayout->addStretch(1);
+
+    tabs_->addTab(createTab, QStringLiteral("New"));
+    tabs_->addTab(joinTab, QStringLiteral("Join"));
+    tabs_->addTab(publicTab, QStringLiteral("Public"));
+
+    error_ = new QLabel;
+    error_->setWordWrap(true);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+    addButton_ = buttons->addButton(QStringLiteral("Add"), QDialogButtonBox::AcceptRole);
+    addButton_->setDefault(true);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
+    layout->addWidget(tabs_, 1);
+    layout->addWidget(error_);
+    layout->addWidget(buttons);
+
+    connect(regenerate, &QPushButton::clicked, this, &AddChannelDialog::regenerateKey);
+    connect(copy, &QPushButton::clicked, this,
+            [this] { QGuiApplication::clipboard()->setText(createKey_->text()); });
+    connect(tabs_, &QTabWidget::currentChanged, this, [this] { updateOkButton(); });
+    connect(publicWellKnown_, &QRadioButton::toggled, this, [this](bool on) {
+        hashtag_->setEnabled(!on);
+        updateOkButton();
+    });
+    for (QLineEdit* field : {createName_, joinName_, joinKey_, hashtag_})
+        connect(field, &QLineEdit::textChanged, this, [this] { updateOkButton(); });
+    connect(buttons, &QDialogButtonBox::accepted, this, &AddChannelDialog::onAccepted);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+
+    // A 32-character key on one line, and short enough for the uConsole's 480
+    // rows with the hint text wrapped.
+    setMinimumWidth(460);
+}
+
+void AddChannelDialog::regenerateKey() {
+    createKey_->setText(QString::fromLatin1(randomSecret().toHex()));
+    updateOkButton();
+}
+
+// ---------------------------------------------------------------------------
+// What the tabs describe
+// ---------------------------------------------------------------------------
+
+model::Channel AddChannelDialog::currentChannel() const {
+    model::Channel ch;
+    ch.index = freeSlot_;
+
+    switch (tabs_->currentIndex()) {
+        case CreateTab:
+            ch.name = createName_->text().trimmed();
+            ch.secret = QByteArray::fromHex(createKey_->text().toLatin1());
+            break;
+        case JoinTab:
+            ch.name = joinName_->text().trimmed();
+            if (const std::optional<QByteArray> secret = parseSecret(joinKey_->text()))
+                ch.secret = *secret;
+            break;
+        case PublicTab:
+            if (publicWellKnown_->isChecked()) {
+                ch.name = QStringLiteral("Public");
+                ch.secret = model::publicChannelKey();
+            } else {
+                QString tag = hashtag_->text().trimmed();
+                // The '#' is part of the hashed name, so a tag typed without one
+                // would otherwise derive a different key than everyone else's.
+                if (!tag.startsWith(QLatin1Char('#'))) tag.prepend(QLatin1Char('#'));
+                if (tag.size() > 1) {
+                    ch.name = tag;
+                    ch.secret = model::hashtagChannelKey(tag);
+                }
+            }
+            break;
+    }
+
+    ch.type = model::Channel::classify(ch.name, ch.secret);
+    return ch;
+}
+
+void AddChannelDialog::updateOkButton() {
+    const model::Channel ch = currentChannel();
+
+    // An unfinished form is not a mistake worth complaining about; the disabled
+    // Add button says enough.
+    if (ch.name.isEmpty() || ch.secret.isEmpty()) {
+        const bool keyTyped = tabs_->currentIndex() == JoinTab && !joinKey_->text().isEmpty();
+        setError(keyTyped ? QStringLiteral("That key is neither 32 hex characters nor base64.")
+                          : QString());
+        addButton_->setEnabled(false);
+        return;
+    }
+
+    if (freeSlot_ < 0) {
+        setError(QStringLiteral("All %1 channel slots are in use.").arg(proto::MaxChannels));
+        addButton_->setEnabled(false);
+        return;
+    }
+
+    if (isZero(ch.secret)) {
+        // An all-zero key is how SET_CHANNEL clears a slot, so it would delete
+        // rather than join.
+        setError(QStringLiteral("An all-zero key does not name a channel."));
+        addButton_->setEnabled(false);
+        return;
+    }
+
+    for (const model::Channel& other : existing_) {
+        if (other.secret != ch.secret) continue;
+        setError(QStringLiteral("Already joined as \"%1\" in slot %2.")
+                     .arg(other.displayName())
+                     .arg(other.index));
+        addButton_->setEnabled(false);
+        return;
+    }
+
+    setError({});
+    addButton_->setEnabled(true);
+}
+
+void AddChannelDialog::setError(const QString& text) {
+    error_->setText(text);
+    error_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::Error.name()));
+}
+
+void AddChannelDialog::onAccepted() {
+    const model::Channel ch = currentChannel();
+    if (!addButton_->isEnabled() || !ch.configured()) return;
+    result_ = ch;
+    accept();
+}

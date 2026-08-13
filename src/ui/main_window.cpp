@@ -2,6 +2,7 @@
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -12,12 +13,15 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "model/channel_model.h"
 #include "model/chat_model.h"
+#include "ui/add_channel_dialog.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
+#include "ui/icons.h"
 #include "ui/message_delegate.h"
 #include "ui/theme.h"
 
@@ -114,6 +118,8 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     connect(client_, &proto::CompanionClient::directMessageReceived, this,
             &MainWindow::onDirectMessageReceived);
     connect(client_, &proto::CompanionClient::sendResult, this, &MainWindow::onSendResult);
+    connect(client_, &proto::CompanionClient::channelSaveResult, this,
+            &MainWindow::onChannelSaveResult);
 
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
@@ -143,6 +149,20 @@ void MainWindow::openConnectDialog() {
     connectTo(dialog.target());
 }
 
+void MainWindow::openAddChannelDialog() {
+    // The device holds the channel list and the keys, so adding one is a write
+    // to it — and the dialog needs those keys to recognise a channel that is
+    // already joined. Neither works from the offline cache.
+    if (client_->state() != proto::CompanionClient::State::Ready) return;
+
+    AddChannelDialog dialog(client_->channels(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const model::Channel ch = dialog.channel();
+    statusBar()->showMessage(QStringLiteral("Adding %1...").arg(ch.displayName()), 10000);
+    client_->setChannel(ch.index, ch.name, ch.secret);
+}
+
 void MainWindow::buildUi() {
     // --- channel list -------------------------------------------------------
     auto* left = new QWidget;
@@ -150,14 +170,45 @@ void MainWindow::buildUi() {
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(0);
 
-    auto* channelsHeader = new QLabel(QStringLiteral("CHANNELS"));
-    channelsHeader->setObjectName(QStringLiteral("header"));
-    QFont headerFont = channelsHeader->font();
+    // The title and the add button share the header strip: at 480 rows there is
+    // no menu bar and no room for a toolbar, so the one channel action lives
+    // beside the label it belongs to.
+    auto* channelsHeader = new QWidget;
+    channelsHeader->setObjectName(QStringLiteral("sidebarHeader"));
+    auto* channelsHeaderLayout = new QHBoxLayout(channelsHeader);
+    channelsHeaderLayout->setContentsMargins(10, 4, 6, 4);
+    channelsHeaderLayout->setSpacing(4);
+
+    auto* channelsTitle = new QLabel(QStringLiteral("CHANNELS"));
+    QFont headerFont = channelsTitle->font();
     headerFont.setPointSizeF(qMax(6.5, headerFont.pointSizeF() - 1.5));
     headerFont.setBold(true);
     headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
-    channelsHeader->setFont(headerFont);
-    channelsHeader->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+    channelsTitle->setFont(headerFont);
+    channelsTitle->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+
+    // One SVG rendered in three colours: QIcon picks the mode itself, which is
+    // cheaper than restyling the button on hover and enable changes.
+    constexpr int PlusSize = 14;
+    const qreal dpr = devicePixelRatioF();
+    QIcon plus;
+    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::TextMuted, dpr),
+                   QIcon::Normal);
+    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::Accent, dpr),
+                   QIcon::Active);
+    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::Border, dpr),
+                   QIcon::Disabled);
+
+    addChannelButton_ = new QToolButton;
+    addChannelButton_->setObjectName(QStringLiteral("iconButton"));
+    addChannelButton_->setIcon(plus);
+    addChannelButton_->setIconSize(QSize(PlusSize, PlusSize));
+    addChannelButton_->setAutoRaise(true);
+    addChannelButton_->setCursor(Qt::PointingHandCursor);
+    addChannelButton_->setFocusPolicy(Qt::NoFocus);
+
+    channelsHeaderLayout->addWidget(channelsTitle, 1);
+    channelsHeaderLayout->addWidget(addChannelButton_);
 
     channelModel_ = new model::ChannelModel(this);
     channelList_ = new QListView;
@@ -247,6 +298,7 @@ void MainWindow::buildUi() {
     statusBar()->setSizeGripEnabled(false);
 
     connect(targetButton_, &QPushButton::clicked, this, &MainWindow::openConnectDialog);
+    connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             &MainWindow::onChannelSelected);
     connect(sendButton_, &QPushButton::clicked, this, &MainWindow::onSendClicked);
@@ -257,6 +309,7 @@ void MainWindow::buildUi() {
     resize(1024, 480);
     onTextChanged({});
     updateInputState();
+    updateChannelActions();
     updateHeader();
 }
 
@@ -329,6 +382,20 @@ void MainWindow::showChannels(const QVector<model::Channel>& channels) {
     currentChannel_ = -1;  // force showChannel() to reload
     selectChannel(wanted);
     updateInputState();
+    updateChannelActions();
+}
+
+void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& error) {
+    if (!ok) {
+        statusBar()->showMessage(QStringLiteral("Could not add the channel: %1").arg(error), 8000);
+        return;
+    }
+
+    // The sidebar was rebuilt before this arrived, so the slot is there to open.
+    // The user asked for it a moment ago; showing it is what they meant.
+    statusBar()->clearMessage();
+    selectChannel(channelIndex);
+    updateChannelActions();
 }
 
 void MainWindow::selectChannel(int channelIndex) {
@@ -469,6 +536,16 @@ void MainWindow::updateInputState() {
                                        : QStringLiteral("Waiting for a connection..."));
 }
 
+void MainWindow::updateChannelActions() {
+    const bool ready = client_->state() == proto::CompanionClient::State::Ready;
+    const bool room = AddChannelDialog::hasFreeSlot(client_->channels());
+    addChannelButton_->setEnabled(ready && room);
+    addChannelButton_->setToolTip(!room ? QStringLiteral("All %1 channel slots are in use")
+                                              .arg(proto::MaxChannels)
+                                 : ready ? QStringLiteral("Add a channel")
+                                         : QStringLiteral("Connect to add a channel"));
+}
+
 // ---------------------------------------------------------------------------
 // Connection
 // ---------------------------------------------------------------------------
@@ -501,6 +578,7 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
     connectionLabel_->setText(QStringLiteral("● %1").arg(label));
     connectionLabel_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
     updateInputState();
+    updateChannelActions();
 }
 
 void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
