@@ -1,5 +1,6 @@
 #include "ui/main_window.h"
 
+#include <QAction>
 #include <QCloseEvent>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -314,15 +315,28 @@ void MainWindow::buildUi() {
     chatView_->setResizeMode(QListView::Adjust);
 
     auto* inputRow = new QWidget;
-    auto* inputLayout = new QHBoxLayout(inputRow);
+    auto* inputLayout = new QVBoxLayout(inputRow);
     inputLayout->setContentsMargins(8, 6, 8, 6);
-    inputLayout->setSpacing(6);
+    inputLayout->setSpacing(2);
 
     input_ = new QLineEdit;
     input_->setPlaceholderText(QStringLiteral("Message"));
     // A mesh payload is 184 bytes; the daemon would reject anything longer, so
     // stop it at the keyboard instead of after a failed transmit.
     input_->setMaxLength(proto::MaxMessageChars);
+
+    constexpr int SendIconSize = 16;
+    QIcon sendIcon;
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Accent, dpr),
+                       QIcon::Normal);
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Text, dpr),
+                       QIcon::Active);
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Border, dpr),
+                       QIcon::Disabled);
+    sendAction_ = input_->addAction(sendIcon, QLineEdit::TrailingPosition);
+    sendAction_->setObjectName(QStringLiteral("sendAction"));
+    sendAction_->setText(QStringLiteral("Send message"));
+    sendAction_->setToolTip(QStringLiteral("Send message"));
 
     charCount_ = new QLabel;
     QFont countFont = charCount_->font();
@@ -332,12 +346,8 @@ void MainWindow::buildUi() {
     charCount_->setMinimumWidth(28);
     charCount_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-    sendButton_ = new QPushButton(QStringLiteral("Send"));
-    sendButton_->setDefault(true);
-
-    inputLayout->addWidget(input_, 1);
-    inputLayout->addWidget(charCount_);
-    inputLayout->addWidget(sendButton_);
+    inputLayout->addWidget(input_);
+    inputLayout->addWidget(charCount_, 0, Qt::AlignRight);
 
     // Sits above the message box, where the eye already is when a send fails,
     // and takes no room at all the rest of the time.
@@ -370,7 +380,7 @@ void MainWindow::buildUi() {
     connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             &MainWindow::onChannelSelected);
-    connect(sendButton_, &QPushButton::clicked, this, &MainWindow::onSendClicked);
+    connect(sendAction_, &QAction::triggered, this, &MainWindow::onSendClicked);
     connect(input_, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
     connect(input_, &QLineEdit::textChanged, this, &MainWindow::onTextChanged);
 
@@ -654,11 +664,12 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
 }
 
 void MainWindow::onTextChanged(const QString& text) {
+    constexpr int WarningThreshold = 10;
     const int left = proto::MaxMessageChars - int(text.size());
-    charCount_->setText(left <= 30 ? QString::number(left) : QString());
+    charCount_->setText(QStringLiteral("%1/%2").arg(left).arg(proto::MaxMessageChars));
     charCount_->setStyleSheet(
         QStringLiteral("color: %1;")
-            .arg((left <= 10 ? theme::Warning : theme::TextMuted).name()));
+            .arg((left <= WarningThreshold ? theme::Warning : theme::TextMuted).name()));
     updateInputState();
 }
 
@@ -666,7 +677,7 @@ void MainWindow::updateInputState() {
     const bool ready = client_->state() == proto::CompanionClient::State::Ready;
     const bool canType = ready && currentChannel_ >= 0;
     input_->setEnabled(canType);
-    sendButton_->setEnabled(canType && !input_->text().trimmed().isEmpty());
+    sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty());
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
                                : ready ? QStringLiteral("Select a channel")
                                        : QStringLiteral("Waiting for a connection..."));

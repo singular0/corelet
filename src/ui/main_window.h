@@ -7,6 +7,7 @@
 #include "model/history.h"
 #include "protocol/client.h"
 
+class QAction;
 class QLabel;
 class QLineEdit;
 class QListView;
@@ -99,7 +100,7 @@ private:
     QListView* chatView_ = nullptr;
     QLabel* header_ = nullptr;
     QLineEdit* input_ = nullptr;
-    QPushButton* sendButton_ = nullptr;
+    QAction* sendAction_ = nullptr;
     QLabel* charCount_ = nullptr;
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;

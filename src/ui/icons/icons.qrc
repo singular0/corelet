@@ -7,5 +7,6 @@
         <file>plus.svg</file>
         <file>minus.svg</file>
         <file>share.svg</file>
+        <file>send.svg</file>
     </qresource>
 </RCC>
