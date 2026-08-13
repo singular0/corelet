@@ -1,4 +1,4 @@
-#include "model/chatmodel.h"
+#include "model/chat_model.h"
 
 namespace model {
 

@@ -1,4 +1,4 @@
-#include "ui/channeldelegate.h"
+#include "ui/channel_delegate.h"
 
 #include <QDateTime>
 #include <QFontMetrics>
@@ -6,7 +6,7 @@
 #include <QPainter>
 #include <QWidget>
 
-#include "model/channelmodel.h"
+#include "model/channel_model.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
 

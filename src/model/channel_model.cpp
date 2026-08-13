@@ -1,4 +1,4 @@
-#include "model/channelmodel.h"
+#include "model/channel_model.h"
 
 #include <QLocale>
 

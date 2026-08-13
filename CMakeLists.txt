@@ -28,19 +28,20 @@ set(CMAKE_AUTORCC ON)
 add_executable(umeshcore-app
     src/main.cpp
     src/ui/icons/icons.qrc
-    src/protocol/framecodec.cpp
+    src/protocol/frame_codec.cpp
     src/protocol/transport.cpp
-    src/protocol/bletransport.cpp
+    src/protocol/tcp_transport.cpp
+    src/protocol/ble_transport.cpp
     src/protocol/client.cpp
     src/model/history.cpp
-    src/model/chatmodel.cpp
-    src/model/channelmodel.cpp
+    src/model/chat_model.cpp
+    src/model/channel_model.cpp
     src/ui/theme.cpp
     src/ui/icons.cpp
-    src/ui/channeldelegate.cpp
-    src/ui/messagedelegate.cpp
-    src/ui/connectdialog.cpp
-    src/ui/mainwindow.cpp
+    src/ui/channel_delegate.cpp
+    src/ui/message_delegate.cpp
+    src/ui/connect_dialog.cpp
+    src/ui/main_window.cpp
 )
 
 target_include_directories(umeshcore-app PRIVATE src)

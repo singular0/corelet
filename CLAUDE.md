@@ -106,8 +106,7 @@ for permission to commit to the default branch.
 
 - `QT_NO_KEYWORDS` is defined: use `Q_SIGNALS` / `Q_SLOTS` / `Q_EMIT`, never the lowercase macros.
 - Warnings are `-Wall -Wextra -Wpedantic`; keep new code clean.
-- New files are named in `snake_case` (`chat_model.cpp`, not `chatmodel.cpp`). The files committed
-  so far use Qt's flat-lowercase style; leave them alone unless a rename is asked for.
+- Files are named in `snake_case` (`chat_model.cpp`, not `chatmodel.cpp`) throughout.
 - Members are trailing-underscore, 4-space indent, ~100 columns.
 - Comments here explain *why* a thing is the way it is — a wire quirk, a uConsole constraint. Match
   that register rather than narrating what the code does.

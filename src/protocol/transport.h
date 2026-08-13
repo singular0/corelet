@@ -4,10 +4,6 @@
 #include <QObject>
 #include <QString>
 
-#include "protocol/framecodec.h"
-
-class QTcpSocket;
-
 namespace proto {
 
 // The link the companion protocol runs over.
@@ -45,32 +41,6 @@ Q_SIGNALS:
     // Progress while opening. A BLE scan takes seconds, and a status bar that
     // says nothing for that long reads as a hang.
     void progress(const QString& detail);
-};
-
-// TCP to a umeshcored.
-class TcpTransport : public Transport {
-    Q_OBJECT
-
-public:
-    TcpTransport(QString host, quint16 port, QObject* parent = nullptr);
-
-    QString description() const override;
-    void open() override;
-    void close() override;
-    bool isOpen() const override;
-    void send(const QByteArray& payload) override;
-
-private:
-    void fail(const QString& reason);
-
-    QTcpSocket* socket_ = nullptr;
-    QString host_;
-    quint16 port_ = 0;
-
-    FrameReader reader_;
-    // Guards the one-closed()-per-open() rule: Qt reports a refused connection
-    // as an error with no disconnected() after it, and a dropped one as both.
-    bool live_ = false;
 };
 
 // Where to connect, as chosen on the command line or in the connect dialog and

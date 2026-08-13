@@ -1,4 +1,4 @@
-#include "ui/messagedelegate.h"
+#include "ui/message_delegate.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -6,7 +6,7 @@
 #include <QFontMetrics>
 #include <QPainter>
 
-#include "model/chatmodel.h"
+#include "model/chat_model.h"
 #include "ui/theme.h"
 
 namespace {

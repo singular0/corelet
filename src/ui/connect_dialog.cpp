@@ -1,4 +1,4 @@
-#include "ui/connectdialog.h"
+#include "ui/connect_dialog.h"
 
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QCheckBox>
@@ -14,7 +14,7 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
-#include "protocol/bletransport.h"
+#include "protocol/ble_transport.h"
 #include "ui/theme.h"
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)

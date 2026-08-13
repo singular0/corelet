@@ -1,10 +1,10 @@
 #include <QApplication>
 #include <QCommandLineParser>
 
-#include "protocol/bletransport.h"
+#include "protocol/ble_transport.h"
 #include "protocol/transport.h"
-#include "ui/connectdialog.h"
-#include "ui/mainwindow.h"
+#include "ui/connect_dialog.h"
+#include "ui/main_window.h"
 #include "ui/theme.h"
 
 int main(int argc, char** argv) {

@@ -6,7 +6,7 @@
 #include <functional>
 
 #include "model/types.h"
-#include "protocol/framecodec.h"
+#include "protocol/frame_codec.h"
 #include "protocol/transport.h"
 
 class QTimer;

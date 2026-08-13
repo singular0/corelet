@@ -1,4 +1,4 @@
-#include "ui/mainwindow.h"
+#include "ui/main_window.h"
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
@@ -14,11 +14,11 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include "model/channelmodel.h"
-#include "model/chatmodel.h"
-#include "ui/channeldelegate.h"
-#include "ui/connectdialog.h"
-#include "ui/messagedelegate.h"
+#include "model/channel_model.h"
+#include "model/chat_model.h"
+#include "ui/channel_delegate.h"
+#include "ui/connect_dialog.h"
+#include "ui/message_delegate.h"
 #include "ui/theme.h"
 
 namespace {
