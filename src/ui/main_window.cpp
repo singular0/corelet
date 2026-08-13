@@ -524,12 +524,16 @@ void MainWindow::updateHeader() {
         return;
     }
 
-    // Only the conversation's own name: who we are and what the radio is doing
-    // belong to the node pane, which says it once instead of on every channel.
+    // Only the conversation's own name and its slot: who we are and what the
+    // radio is doing belong to the node pane, which says it once instead of on
+    // every channel. The slot is the channel's identity on the device, so it is
+    // what to quote when cross-checking against the daemon.
     const int row = channelModel_->rowForIndex(currentChannel_);
     const QString name = channelModel_->data(channelModel_->index(row),
                                              model::ChannelModel::NameRole).toString();
-    header_->setText(QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped()));
+    header_->setText(QStringLiteral("<b>%1</b> <span style=\"color: %2;\">slot %3</span>")
+                         .arg(name.toHtmlEscaped(), theme::TextMuted.name())
+                         .arg(currentChannel_));
 }
 
 void MainWindow::showNotice(const QString& text, int ms, bool error) {
