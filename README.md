@@ -21,9 +21,9 @@ window.
 | Contacts, adverts, telemetry, settings | Not implemented |
 | Adding or editing channels | Not implemented — edit the daemon's `channels` file |
 
-One history file is shared by every link, keyed only by channel slot, so pointing the app at a
-second node mixes that node's channels into the same history. Fine for one radio, which is what a
-companion app usually is.
+Persisted state is isolated first by the node's public key and then by a fingerprint of each
+channel key. Changing devices cannot expose another device's channels or messages, and moving a
+channel to a different slot keeps its history with the channel.
 
 ## Building
 
@@ -52,8 +52,8 @@ only a bundle has anywhere to declare one — so it runs from
 ## Running
 
 Started with no arguments, the app asks what to connect to: a host and port, or a device picked
-from a Bluetooth scan. It remembers the answer, and the status bar shows the current target —
-click it to point somewhere else.
+from a Bluetooth scan. It remembers the answer, and the node pane shows the current target; use
+its connection button to disconnect or choose another target.
 
 Naming a target on the command line skips the dialog:
 
@@ -83,14 +83,15 @@ Worth knowing before changing anything in `src/protocol/`:
 - **Pushes are interleaved.** Codes `>= 0x80` are unsolicited and are routed before the queue is
   consulted. `PUSH_MSG_WAITING` is what drives collection of new messages.
 - **`SYNC_NEXT_MESSAGE` pops.** Collecting a message removes it from the daemon's inbox, so the
-  daemon is not storage — the app appends everything it collects to `history.jsonl` under
+  daemon is not storage — the app appends everything it collects to `history-v2.jsonl` under
   `QStandardPaths::AppDataLocation`. That file *is* your history; the daemon has no copy.
 - **This includes direct messages.** v1 has no DM view, but running this app still drains DMs from
   the shared inbox. They are written to the same history file under channel `-1` rather than
   dropped, and the status bar reports when one arrives.
 - **All 8 channel slots always answer.** `GET_CHANNEL` returns an entry for every slot; unused ones
-  have an all-zero key, which is how the app tells configured channels apart. Slots are sparse, so
-  a channel's slot number is its identity everywhere — never its row in the list.
+  have an all-zero key, which is how the app tells configured channels apart. Slots are sparse and
+  are only wire addresses. Persistent selection, cache entries and message history use a SHA-256
+  fingerprint of the channel key instead, nested under the node's public key.
 - **Nothing on the wire says what kind of channel a slot holds.** `GET_CHANNEL` answers with a name
   and a key and no more, so the sidebar's public / hashtag / private icon is deduced from the key
   exactly as the daemon builds them: the well-known public key is a constant, a hashtag key is

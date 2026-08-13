@@ -1,12 +1,15 @@
 #include "ui/node_pane.h"
 
-#include <QMouseEvent>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOption>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "ui/elided_label.h"
+#include "ui/icons.h"
 #include "ui/theme.h"
 
 namespace {
@@ -23,9 +26,6 @@ ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color)
     auto* label = new ElidedLabel;
     label->setFont(font);
     label->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
-    // The pane as a whole is the click target; a label that took mouse events
-    // would leave dead spots across most of it.
-    label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     layout->addWidget(label);
     return label;
 }
@@ -34,12 +34,42 @@ ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color)
 
 NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("nodePane"));
-    setCursor(Qt::PointingHandCursor);
-    setToolTip(QStringLiteral("Connect to a different daemon or device"));
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 5, 8, 6);
-    layout->setSpacing(1);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    // Match the channel header above: the section name takes the spare width
+    // and the one action that belongs to the node sits at its trailing edge.
+    auto* header = new QWidget;
+    header->setObjectName(QStringLiteral("sidebarHeader"));
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(10, 4, 6, 4);
+    headerLayout->setSpacing(4);
+
+    auto* title = new QLabel(QStringLiteral("NODE"));
+    QFont headerFont = title->font();
+    headerFont.setPointSizeF(qMax(6.5, headerFont.pointSizeF() - 1.5));
+    headerFont.setBold(true);
+    headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+    title->setFont(headerFont);
+    title->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+
+    connectionButton_ = new QToolButton;
+    connectionButton_->setObjectName(QStringLiteral("iconButton"));
+    connectionButton_->setIconSize(QSize(14, 14));
+    connectionButton_->setAutoRaise(true);
+    connectionButton_->setCursor(Qt::PointingHandCursor);
+    connectionButton_->setFocusPolicy(Qt::NoFocus);
+    updateConnectionAction(false);
+
+    headerLayout->addWidget(title, 1);
+    headerLayout->addWidget(connectionButton_);
+
+    auto* details = new QWidget;
+    auto* detailsLayout = new QVBoxLayout(details);
+    detailsLayout->setContentsMargins(10, 5, 8, 6);
+    detailsLayout->setSpacing(1);
 
     QFont nameFont = font();
     nameFont.setBold(true);
@@ -47,13 +77,23 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     // Rows that can vanish go on top: the pane is anchored to the bottom of the
     // window, so the target and the link state keep their place on screen when
     // the device's answer arrives and pushes the rest upwards.
-    name_ = addRow(layout, nameFont, theme::Text);
-    radio_ = addRow(layout, subFont(font()), theme::TextMuted);
-    target_ = addRow(layout, subFont(font()), theme::TextMuted);
-    status_ = addRow(layout, subFont(font()), theme::TextMuted);
+    name_ = addRow(detailsLayout, nameFont, theme::Text);
+    radio_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
+    target_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
+    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
 
     name_->hide();
     radio_->hide();
+
+    layout->addWidget(header);
+    layout->addWidget(details);
+
+    connect(connectionButton_, &QToolButton::clicked, this, [this] {
+        if (connectionActive_)
+            Q_EMIT disconnectRequested();
+        else
+            Q_EMIT connectRequested();
+    });
 }
 
 void NodePane::setTarget(const QString& label) {
@@ -72,9 +112,29 @@ void NodePane::setDevice(const proto::CompanionClient::DeviceInfo& info) {
     radio_->setVisible(info.freqMhz > 0);
 }
 
-void NodePane::setConnection(const QString& text, const QColor& color) {
+void NodePane::setConnection(const QString& text, const QColor& color, bool active) {
     status_->setFullText(QStringLiteral("● %1").arg(text));
     status_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+    if (active == connectionActive_) return;
+
+    updateConnectionAction(active);
+}
+
+void NodePane::updateConnectionAction(bool active) {
+    constexpr int IconSize = 14;
+    const QString action = active ? QStringLiteral("Disconnect") : QStringLiteral("Connect");
+    const QString iconName = active ? QStringLiteral("unplug") : QStringLiteral("plug");
+    const QColor hover = active ? theme::Error : theme::Accent;
+
+    QIcon icon;
+    icon.addPixmap(icons::tinted(iconName, IconSize, theme::TextMuted, devicePixelRatioF()),
+                   QIcon::Normal);
+    icon.addPixmap(icons::tinted(iconName, IconSize, hover, devicePixelRatioF()), QIcon::Active);
+    connectionButton_->setIcon(icon);
+    connectionButton_->setText(action);
+    connectionButton_->setToolTip(active ? QStringLiteral("Disconnect from this node")
+                                         : QStringLiteral("Connect to a daemon or device"));
+    connectionActive_ = active;
 }
 
 // A QWidget subclass draws no stylesheet background or border of its own, and
@@ -82,41 +142,6 @@ void NodePane::setConnection(const QString& text, const QColor& color) {
 void NodePane::paintEvent(QPaintEvent*) {
     QStyleOption opt;
     opt.initFrom(this);
-    QPainter p(this);
-    style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
-}
-
-void NodePane::mousePressEvent(QMouseEvent* event) {
-    // Accepting the press is what makes the matching release arrive here.
-    if (event->button() != Qt::LeftButton) {
-        QWidget::mousePressEvent(event);
-        return;
-    }
-    event->accept();
-}
-
-void NodePane::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) {
-        QWidget::mouseReleaseEvent(event);
-        return;
-    }
-    // A press that wanders off the pane before release is a cancelled click.
-    if (rect().contains(event->position().toPoint())) Q_EMIT connectRequested();
-}
-
-void NodePane::enterEvent(QEnterEvent* event) {
-    QWidget::enterEvent(event);
-    setHovered(true);
-}
-
-void NodePane::leaveEvent(QEvent* event) {
-    QWidget::leaveEvent(event);
-    setHovered(false);
-}
-
-// The target line brightens under the pointer: without it nothing says the
-// pane can be clicked, and a tooltip alone is no use on a touchscreen.
-void NodePane::setHovered(bool hovered) {
-    target_->setStyleSheet(
-        QStringLiteral("color: %1;").arg((hovered ? theme::Text : theme::TextMuted).name()));
+    QPainter painter(this);
+    style()->drawPrimitive(QStyle::PE_Widget, &opt, &painter, this);
 }

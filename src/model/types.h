@@ -25,6 +25,14 @@ inline QByteArray hashtagChannelKey(const QString& name) {
         .left(ChannelSecretSize);
 }
 
+// Persistent channel identity is derived from the key, never from the device's
+// slot number. Hashing keeps the key itself out of settings and message history
+// while still following a channel if it moves to another slot.
+inline QByteArray channelKeyFingerprint(const QByteArray& secret) {
+    if (secret.size() != ChannelSecretSize) return {};
+    return QCryptographicHash::hash(secret, QCryptographicHash::Sha256);
+}
+
 // Nothing on the wire says what kind of channel a slot holds — GET_CHANNEL
 // answers with a name and a key and no more — so the kind is deduced from the
 // key itself, which is exactly how the daemon builds them.
@@ -34,13 +42,17 @@ enum class ChannelType {
     Private,  // a key that arrived some other way
 };
 
-// One configured channel slot. `index` is the daemon's slot number, which is
-// how the companion protocol addresses channels, so it is the identity here
-// too rather than a position in some list the app happens to build.
+// One configured channel. `index` is only its current wire address; persistent
+// state follows the key fingerprint so moving a channel between slots does not
+// move another channel's history with it.
 struct Channel {
     int index = 0;
     QString name;
     QByteArray secret;  // 16 bytes; all-zero means the slot is unused
+    // Present only for a channel reconstructed from the offline cache, where
+    // the real key deliberately is not stored. Live channels derive the same
+    // value from `secret`.
+    QByteArray cachedKeyFingerprint;
     // Classified once, when the key is in hand: the offline channel cache holds
     // names only, so a Channel rebuilt from it could not work this out itself.
     ChannelType type = ChannelType::Private;
@@ -55,6 +67,11 @@ struct Channel {
     // Empty names are legal on the wire; show something selectable instead.
     QString displayName() const {
         return name.isEmpty() ? QStringLiteral("Channel %1").arg(index) : name;
+    }
+
+    QByteArray keyFingerprint() const {
+        const QByteArray live = channelKeyFingerprint(secret);
+        return live.isEmpty() ? cachedKeyFingerprint : live;
     }
 
     static ChannelType classify(const QString& name, const QByteArray& secret) {

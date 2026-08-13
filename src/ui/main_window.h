@@ -59,11 +59,13 @@ private:
     // Asks first: this deletes the key from the device, and a private channel
     // cannot be got back without a copy of it.
     void removeCurrentChannel();
-    // Shows a channel list, from the device or from the offline cache.
+    // Shows a channel list, from the active device or its identity-scoped cache.
     void showChannels(const QVector<model::Channel>& channels);
     void loadCachedChannels();
+    void saveCachedChannels(const QVector<model::Channel>& channels);
     void selectChannel(int channelIndex);
     void showChannel(int channelIndex);
+    QByteArray currentChannelKey() const;
     // The selected channel as the device holds it -- with its key, and so with
     // its real type, which the offline cache cannot give. Empty when nothing is
     // selected or the link is down, which is also when nothing can be done to it.
@@ -84,6 +86,9 @@ private:
     proto::CompanionClient* client_ = nullptr;
     proto::ConnectTarget target_;
     model::History history_;
+    // The MeshCore public key learned from SELF_INFO. No channel or message is
+    // read or written before this is known.
+    QByteArray activeDeviceId_;
 
     model::ChannelModel* channelModel_ = nullptr;
     model::ChatModel* chatModel_ = nullptr;
@@ -105,14 +110,22 @@ private:
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;
 
-    // Daemon slot number of the open conversation, or -1 for none. Not a row:
-    // rows shift when channels are re-enumerated after a reconnect.
+    // Current daemon slot number of the open conversation, or -1 for none. It
+    // is only a wire address; persistent selection follows the channel key.
     int currentChannel_ = -1;
     int directMessageCount_ = 0;
 
     // Sends the daemon has not answered yet, by the tag the app gave them. They
     // are on screen but not in history: a message is written down only once it
     // is known to have got somewhere.
-    QHash<int, model::Message> pendingSends_;
+    struct PendingSend {
+        model::Message message;
+        QByteArray deviceId;
+        QByteArray channelKey;
+    };
+    QHash<int, PendingSend> pendingSends_;
+    // clearChannel() removes the channel from the client's list before its
+    // result reaches the window, so retain the key-derived identity here.
+    QHash<int, QByteArray> pendingChannelRemovals_;
     int lastSendToken_ = 0;
 };

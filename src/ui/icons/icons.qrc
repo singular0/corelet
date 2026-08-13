@@ -10,5 +10,7 @@
         <file>send.svg</file>
         <file>copy.svg</file>
         <file>refresh-cw.svg</file>
+        <file>plug.svg</file>
+        <file>unplug.svg</file>
     </qresource>
 </RCC>

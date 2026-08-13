@@ -30,21 +30,28 @@ public:
     // a corrupt history is an annoyance, not a reason to lose the app.
     void load();
 
-    const QVector<Message>& messages(int channelIndex) const;
-    void append(const Message& msg);
-    // Forgets a channel's messages, on disk as well as in memory. The slot
-    // number is the only key history has, so a slot that is emptied and later
-    // filled with a different channel would otherwise open showing a
-    // conversation nobody on the new channel ever had.
-    void remove(int channelIndex);
+    // Returns a copy with the channel's current wire slot applied. Slots are
+    // deliberately absent from storage and may change between connections.
+    QVector<Message> messages(const QByteArray& deviceId,
+                              const QByteArray& channelKeyFingerprint,
+                              int channelIndex) const;
+    void append(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
+                const Message& msg);
+    // Forgets a channel's messages, on disk as well as in memory. Device
+    // identity and the channel-key fingerprint are the complete scope;
+    // neither a device switch nor a reused slot can inherit these messages.
+    void remove(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint);
 
 private:
-    void appendLine(const Message& msg);
+    void appendLine(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
+                    const Message& msg);
     // Rewrites the file from the trimmed in-memory state.
     void compact();
 
     QString path_;
-    QHash<int, QVector<Message>> byChannel_;
+    // An empty inner key is reserved for direct messages, which belong to the
+    // device but not to one of its channels.
+    QHash<QByteArray, QHash<QByteArray, QVector<Message>>> byDevice_;
     // How many lines the file holds, so trimming happens on a whole-file
     // rewrite rather than per append.
     int linesOnDisk_ = 0;

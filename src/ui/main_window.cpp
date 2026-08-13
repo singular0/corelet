@@ -33,7 +33,11 @@ namespace {
 
 QString historyPath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-           QStringLiteral("/history.jsonl");
+           QStringLiteral("/history-v2.jsonl");
+}
+
+QString deviceSettingsGroup(const QByteArray& deviceId) {
+    return QStringLiteral("devices/%1").arg(QString::fromLatin1(deviceId.toHex()));
 }
 
 // Every node ships with the Public channel and it is how a stranger is reached
@@ -161,10 +165,11 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     splitter_->restoreState(settings.value(QStringLiteral("splitter")).toByteArray());
-
-    // Paint the sidebar and history straight away rather than after the
-    // handshake; the device's list replaces this as soon as it arrives.
-    loadCachedChannels();
+    // These legacy values had no device or channel-key scope and cannot be
+    // assigned safely. Stop carrying them forward; history.jsonl itself stays
+    // untouched as a recoverable legacy file.
+    settings.remove(QStringLiteral("channelCache"));
+    settings.remove(QStringLiteral("channel"));
 
     connectTo(target);
 }
@@ -172,9 +177,21 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
 void MainWindow::connectTo(const proto::ConnectTarget& target) {
     if (!target.isValid()) return;
 
-    // History and the channel cache are not keyed by device: pointing the app
-    // at a second node mixes its channels into the same history file. v1
-    // assumes one radio, which is what a companion app usually is.
+    // A target address is not a device identity: a daemon endpoint can later
+    // serve another radio. Hide the old device immediately and do not load any
+    // persisted state until SELF_INFO supplies the new public key.
+    activeDeviceId_.clear();
+    pendingChannelRemovals_.clear();
+    currentChannel_ = -1;
+    channelModel_->clearTransientState();
+    channelModel_->setChannels({});
+    chatModel_->setMessages({});
+    setWindowTitle(QStringLiteral("MeshCore"));
+    nodePane_->setDevice({});
+    updateHeader();
+    updateInputState();
+    updateChannelActions();
+
     target_ = target;
     nodePane_->setTarget(target.label());
     client_->start(proto::createTransport(target));
@@ -237,6 +254,7 @@ void MainWindow::removeCurrentChannel() {
     if (box.clickedButton() != confirm) return;
 
     showNotice(QStringLiteral("Removing %1...").arg(ch->displayName()), 10000);
+    pendingChannelRemovals_.insert(ch->index, ch->keyFingerprint());
     client_->clearChannel(ch->index);
 }
 
@@ -375,6 +393,7 @@ void MainWindow::buildUi() {
     setCentralWidget(splitter_);
 
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
+    connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
     connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
@@ -396,7 +415,6 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     QSettings settings;
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
     settings.setValue(QStringLiteral("splitter"), splitter_->saveState());
-    settings.setValue(QStringLiteral("channel"), currentChannel_);
     QMainWindow::closeEvent(event);
 }
 
@@ -412,51 +430,90 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onChannelsChanged(const QVector<model::Channel>& channels) {
-    // Remember the list so the next launch can show the sidebar and history
-    // immediately, and keep showing them while the daemon is restarting. Only
-    // names are cached: the channel keys stay in the daemon's state directory
-    // rather than being copied into a settings file. The type goes with them
-    // because it is derived from a key the cache will not have.
-    QStringList cached;
-    for (const model::Channel& ch : channels)
-        cached << QStringLiteral("%1\x1f%2\x1f%3").arg(ch.index).arg(ch.name).arg(int(ch.type));
-    QSettings().setValue(QStringLiteral("channelCache"), cached);
-
+    // SELF_INFO precedes channel enumeration. Refusing an unscoped write here
+    // is what prevents a malformed handshake from recreating the old bug.
+    if (activeDeviceId_.size() != 32) return;
+    saveCachedChannels(channels);
     showChannels(channels);
 }
 
 void MainWindow::loadCachedChannels() {
+    if (activeDeviceId_.size() != 32) return;
+
     QVector<model::Channel> channels;
-    const QStringList cached = QSettings().value(QStringLiteral("channelCache")).toStringList();
-    for (const QString& entry : cached) {
-        const QStringList parts = entry.split(QLatin1Char('\x1f'));
-        if (parts.size() < 2) continue;
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("channels"));
+    for (const QString& key : settings.childGroups()) {
+        const QByteArray fingerprint = QByteArray::fromHex(key.toLatin1());
+        if (fingerprint.size() != 32) continue;
+
+        settings.beginGroup(key);
         model::Channel ch;
-        ch.index = parts[0].toInt();
-        ch.name = parts[1];
-        // Entries written before the cache carried a type are read for what the
-        // name gives away, which the device's answer corrects a moment later.
-        ch.type = parts.size() > 2 ? model::channelTypeFromInt(parts[2].toInt())
-                                   : model::Channel::classifyByName(ch.name);
+        ch.index = settings.value(QStringLiteral("slot"), -1).toInt();
+        ch.name = settings.value(QStringLiteral("name")).toString();
+        ch.type = model::channelTypeFromInt(
+            settings.value(QStringLiteral("type"), int(model::ChannelType::Private)).toInt());
+        ch.cachedKeyFingerprint = fingerprint;
+        settings.endGroup();
+        if (ch.index < 0) continue;
         channels.append(ch);
     }
+    settings.endGroup();
+    settings.endGroup();
+
+    std::sort(channels.begin(), channels.end(), [](const model::Channel& a,
+                                                   const model::Channel& b) {
+        return a.index < b.index;
+    });
     if (!channels.isEmpty()) showChannels(channels);
 }
 
+void MainWindow::saveCachedChannels(const QVector<model::Channel>& channels) {
+    if (activeDeviceId_.size() != 32) return;
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    // Re-enumeration is authoritative. Removing the group first prevents a
+    // deleted channel from lingering in this device's offline view.
+    settings.remove(QStringLiteral("channels"));
+    settings.beginGroup(QStringLiteral("channels"));
+    for (const model::Channel& ch : channels) {
+        const QByteArray fingerprint = ch.keyFingerprint();
+        if (fingerprint.size() != 32) continue;
+        settings.beginGroup(QString::fromLatin1(fingerprint.toHex()));
+        settings.setValue(QStringLiteral("slot"), ch.index);
+        settings.setValue(QStringLiteral("name"), ch.name);
+        settings.setValue(QStringLiteral("type"), int(ch.type));
+        settings.endGroup();
+    }
+    settings.endGroup();
+    settings.endGroup();
+}
+
 void MainWindow::showChannels(const QVector<model::Channel>& channels) {
+    QByteArray wantedKey = currentChannelKey();
+    if (wantedKey.isEmpty() && activeDeviceId_.size() == 32) {
+        QSettings settings;
+        settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+        wantedKey = QByteArray::fromHex(
+            settings.value(QStringLiteral("selectedChannel")).toString().toLatin1());
+        settings.endGroup();
+    }
+
     channelModel_->setChannels(channels);
 
     for (const model::Channel& ch : channels) {
-        const QVector<model::Message>& msgs = history_.messages(ch.index);
+        const QVector<model::Message> msgs =
+            history_.messages(activeDeviceId_, ch.keyFingerprint(), ch.index);
         if (!msgs.isEmpty()) channelModel_->setLastMessage(ch.index, msgs.last());
     }
 
-    // Prefer the channel that was open before, then the one from last session,
-    // then the first slot — a reconnect should not move the user.
-    int wanted = currentChannel_;
-    if (wanted < 0) wanted = QSettings().value(QStringLiteral("channel"), -1).toInt();
-    if (channelModel_->rowForIndex(wanted) < 0)
-        wanted = channels.isEmpty() ? -1 : channels.first().index;
+    // Selection follows the channel key, not its former wire slot. If that
+    // channel is gone, fall back to the first channel on this device.
+    int wantedRow = channelModel_->rowForKey(wantedKey);
+    if (wantedRow < 0 && !channels.isEmpty()) wantedRow = 0;
+    const int wanted = wantedRow < 0 ? -1 : channelModel_->channelIndexForRow(wantedRow);
 
     // Force showChannel() to reload: the rows are new, and the open channel may
     // be gone from the list altogether -- removed, or dropped by the device --
@@ -484,18 +541,18 @@ void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& e
 }
 
 void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString& error) {
+    const QByteArray channelKey = pendingChannelRemovals_.take(channelIndex);
     if (!ok) {
         showNotice(QStringLiteral("Could not remove the channel: %1").arg(error), 8000, true);
         return;
     }
 
     // The sidebar was rebuilt before this arrived and has already moved off the
-    // slot. What is left is everything else keyed by that slot number, which the
-    // next channel written into it would otherwise inherit: the conversation,
-    // its unread count, and the preview line in the row.
+    // channel. Its key fingerprint was retained before the slot was cleared so
+    // only this device's copy of that channel history is removed.
     hideNotice();
-    history_.remove(channelIndex);
-    channelModel_->forget(channelIndex);
+    history_.remove(activeDeviceId_, channelKey);
+    channelModel_->forget(channelKey);
     updateChannelActions();
 }
 
@@ -506,6 +563,11 @@ void MainWindow::selectChannel(int channelIndex) {
         return;
     }
     channelList_->setCurrentIndex(channelModel_->index(row));
+    // A reconnect resets the channel model, but the selected slot may land on
+    // the same row as before. Do not depend on QItemSelectionModel deciding
+    // that this is a current-index change: the refreshed channel list must
+    // always reload its conversation from the updated history.
+    showChannel(channelIndex);
 }
 
 void MainWindow::onChannelSelected(const QModelIndex& current, const QModelIndex&) {
@@ -516,9 +578,18 @@ void MainWindow::showChannel(int channelIndex) {
     if (channelIndex == currentChannel_) return;
     currentChannel_ = channelIndex;
 
-    chatModel_->setMessages(channelIndex >= 0 ? history_.messages(channelIndex)
-                                              : QVector<model::Message>());
+    const QByteArray channelKey = currentChannelKey();
+    chatModel_->setMessages(channelIndex >= 0 && activeDeviceId_.size() == 32
+                                ? history_.messages(activeDeviceId_, channelKey, channelIndex)
+                                : QVector<model::Message>());
     channelModel_->clearUnread(channelIndex);
+    if (channelIndex >= 0 && !channelKey.isEmpty() && activeDeviceId_.size() == 32) {
+        QSettings settings;
+        settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+        settings.setValue(QStringLiteral("selectedChannel"),
+                          QString::fromLatin1(channelKey.toHex()));
+        settings.endGroup();
+    }
     updateHeader();
     updateInputState();
     // Removing acts on the selection, so the button follows it.
@@ -528,6 +599,10 @@ void MainWindow::showChannel(int channelIndex) {
     // delegate has sized the rows lands in the wrong place.
     messageDelegate_->setViewportWidth(chatView_->viewport()->width());
     QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
+}
+
+QByteArray MainWindow::currentChannelKey() const {
+    return currentChannel_ < 0 ? QByteArray() : channelModel_->keyForIndex(currentChannel_);
 }
 
 std::optional<model::Channel> MainWindow::currentChannelOnDevice() const {
@@ -550,8 +625,8 @@ void MainWindow::updateHeader() {
 
     // Only the conversation's own name and its slot: who we are and what the
     // radio is doing belong to the node pane, which says it once instead of on
-    // every channel. The slot is the channel's identity on the device, so it is
-    // what to quote when cross-checking against the daemon.
+    // every channel. The slot is useful when cross-checking against the daemon,
+    // though persistence follows the channel key rather than this wire address.
     const int row = channelModel_->rowForIndex(currentChannel_);
     const QString name = channelModel_->data(channelModel_->index(row),
                                              model::ChannelModel::NameRole).toString();
@@ -578,7 +653,21 @@ void MainWindow::hideNotice() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onMessageReceived(const model::Message& msg) {
-    history_.append(msg);
+    QByteArray channelKey = channelModel_->keyForIndex(msg.channelIndex);
+    // The live list is authoritative if a message races a UI reset. The
+    // protocol has already popped the message, so losing it merely because its
+    // row is not painted yet would be data loss.
+    if (channelKey.isEmpty()) {
+        for (const model::Channel& channel : client_->channels()) {
+            if (channel.index == msg.channelIndex) {
+                channelKey = channel.keyFingerprint();
+                break;
+            }
+        }
+    }
+    if (activeDeviceId_.size() != 32 || channelKey.size() != 32) return;
+
+    history_.append(activeDeviceId_, channelKey, msg);
     channelModel_->setLastMessage(msg.channelIndex, msg);
 
     if (msg.channelIndex == currentChannel_)
@@ -591,7 +680,8 @@ void MainWindow::onDirectMessageReceived(const model::Message& msg) {
     // v1 has no DM view, but SYNC_NEXT_MESSAGE already popped this from the
     // daemon's inbox: not writing it down would destroy it. It goes to the same
     // history file under channel -1, ready for whenever DMs are built out.
-    history_.append(msg);
+    if (activeDeviceId_.size() != 32) return;
+    history_.append(activeDeviceId_, {}, msg);
     directMessageCount_++;
     showNotice(QStringLiteral("%1 direct message(s) received and saved — no DM view yet")
                    .arg(directMessageCount_),
@@ -612,6 +702,8 @@ void MainWindow::onSendClicked() {
     const QString text = input_->text().trimmed();
     if (text.isEmpty() || currentChannel_ < 0) return;
     if (client_->state() != proto::CompanionClient::State::Ready) return;
+    const QByteArray channelKey = currentChannelKey();
+    if (activeDeviceId_.size() != 32 || channelKey.size() != 32) return;
 
     input_->clear();
 
@@ -630,7 +722,7 @@ void MainWindow::onSendClicked() {
 
     // Registered before the command goes out: a send refused on the spot answers
     // from inside the call below.
-    pendingSends_.insert(msg.sendToken, msg);
+    pendingSends_.insert(msg.sendToken, {msg, activeDeviceId_, channelKey});
     appendToView(msg);
     client_->sendChannelMessage(msg.channelIndex, msg.text, msg.sendToken);
 }
@@ -638,7 +730,8 @@ void MainWindow::onSendClicked() {
 void MainWindow::onSendResult(int token, bool ok, const QString& error) {
     const auto it = pendingSends_.constFind(token);
     if (it == pendingSends_.constEnd()) return;
-    model::Message msg = *it;
+    const PendingSend pending = *it;
+    model::Message msg = pending.message;
     pendingSends_.erase(it);
 
     if (!ok) {
@@ -646,7 +739,9 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
         chatModel_->removePending(token);
         showNotice(QStringLiteral("Could not send: %1").arg(error), 6000, true);
         // Hand the text back rather than losing it to a failed send.
-        if (input_->text().isEmpty()) input_->setText(msg.text);
+        if (pending.deviceId == activeDeviceId_ && pending.channelKey == currentChannelKey() &&
+            input_->text().isEmpty())
+            input_->setText(msg.text);
         return;
     }
 
@@ -654,12 +749,19 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
     // the daemon's inbox, and a message that never left has no business in it.
     msg.sendState = model::Message::SendState::Sent;
     msg.sendToken = 0;
-    history_.append(msg);
-    channelModel_->setLastMessage(msg.channelIndex, msg);
+    history_.append(pending.deviceId, pending.channelKey, msg);
+
+    const bool stillShowingDevice = pending.deviceId == activeDeviceId_;
+    const int row = stillShowingDevice ? channelModel_->rowForKey(pending.channelKey) : -1;
+    if (row >= 0) {
+        msg.channelIndex = channelModel_->channelIndexForRow(row);
+        channelModel_->setLastMessage(msg.channelIndex, msg);
+    }
     // The row it went up as is gone if the conversation was reloaded meanwhile.
     // Put the message back when that happened to the channel being looked at;
     // any other channel reads it from history when it is opened.
-    if (!chatModel_->markSent(token) && msg.channelIndex == currentChannel_)
+    if (!chatModel_->markSent(token) && stillShowingDevice &&
+        pending.channelKey == currentChannelKey())
         appendToView(msg);
 }
 
@@ -741,12 +843,26 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
             color = theme::Accent;
             break;
     }
-    nodePane_->setConnection(label, color);
+    nodePane_->setConnection(label, color, client_->isRunning());
     updateInputState();
     updateChannelActions();
 }
 
 void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
+    if (info.pubkey.size() == 32 && info.pubkey != activeDeviceId_) {
+        // The endpoint may now serve a different radio. Switch storage scopes
+        // on the cryptographic identity, then show only that device's cache
+        // while its live channel enumeration completes.
+        activeDeviceId_ = info.pubkey;
+        currentChannel_ = -1;
+        channelModel_->clearTransientState();
+        channelModel_->setChannels({});
+        chatModel_->setMessages({});
+        loadCachedChannels();
+        updateHeader();
+        updateInputState();
+        updateChannelActions();
+    }
     setWindowTitle(info.name.isEmpty() ? QStringLiteral("MeshCore")
                                        : QStringLiteral("MeshCore — %1").arg(info.name));
     nodePane_->setDevice(info);

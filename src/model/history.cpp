@@ -1,5 +1,6 @@
 #include "model/history.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -17,9 +18,14 @@ namespace {
 // file grow without bound on a device with a small SD card.
 constexpr int CompactThreshold = History::MaxPerChannel * 8;
 
-QJsonObject toJson(const Message& m) {
+QJsonObject toJson(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
+                   const Message& m) {
     QJsonObject o;
-    o["ch"] = m.channelIndex;
+    o["device"] = QString::fromLatin1(deviceId.toHex());
+    if (channelKeyFingerprint.isEmpty())
+        o["direct"] = true;
+    else
+        o["channel"] = QString::fromLatin1(channelKeyFingerprint.toHex());
     o["ts"] = qint64(m.timestamp.toSecsSinceEpoch());
     o["text"] = m.text;
     if (!m.sender.isEmpty()) o["from"] = m.sender;
@@ -31,9 +37,22 @@ QJsonObject toJson(const Message& m) {
     return o;
 }
 
-bool fromJson(const QJsonObject& o, Message& out) {
-    if (!o.contains("ch") || !o.contains("text")) return false;
-    out.channelIndex = o["ch"].toInt();
+bool fromJson(const QJsonObject& o, QByteArray& deviceId, QByteArray& channelKeyFingerprint,
+              Message& out) {
+    if (!o.contains("device") || !o.contains("text")) return false;
+    deviceId = QByteArray::fromHex(o["device"].toString().toLatin1());
+    if (deviceId.size() != 32) return false;
+
+    const bool direct = o["direct"].toBool(false);
+    channelKeyFingerprint = QByteArray::fromHex(o["channel"].toString().toLatin1());
+    if (!direct && channelKeyFingerprint.size() != QCryptographicHash::hashLength(
+                                                    QCryptographicHash::Sha256))
+        return false;
+    if (direct) channelKeyFingerprint.clear();
+
+    // A stored channel has no slot. The caller binds it to the slot used by the
+    // current connection; -1 remains the runtime address for direct messages.
+    out.channelIndex = direct ? -1 : 0;
     out.text = o["text"].toString();
     out.sender = o["from"].toString();
     out.outgoing = o["out"].toBool(false);
@@ -64,70 +83,102 @@ void History::load() {
         const QJsonDocument doc = QJsonDocument::fromJson(line, &err);
         if (err.error != QJsonParseError::NoError || !doc.isObject()) continue;
 
+        QByteArray deviceId;
+        QByteArray channelKeyFingerprint;
         Message m;
-        if (!fromJson(doc.object(), m)) continue;
-        byChannel_[m.channelIndex].append(m);
+        if (!fromJson(doc.object(), deviceId, channelKeyFingerprint, m)) continue;
+        byDevice_[deviceId][channelKeyFingerprint].append(m);
     }
     f.close();
 
     bool trimmed = false;
-    for (auto it = byChannel_.begin(); it != byChannel_.end(); ++it) {
-        if (it->size() > MaxPerChannel) {
-            it->remove(0, it->size() - MaxPerChannel);
-            trimmed = true;
+    for (auto device = byDevice_.begin(); device != byDevice_.end(); ++device) {
+        for (auto channel = device->begin(); channel != device->end(); ++channel) {
+            if (channel->size() > MaxPerChannel) {
+                channel->remove(0, channel->size() - MaxPerChannel);
+                trimmed = true;
+            }
         }
     }
     if (trimmed || linesOnDisk_ > CompactThreshold) compact();
 }
 
-const QVector<Message>& History::messages(int channelIndex) const {
-    static const QVector<Message> empty;
-    auto it = byChannel_.constFind(channelIndex);
-    return it == byChannel_.constEnd() ? empty : *it;
+QVector<Message> History::messages(const QByteArray& deviceId,
+                                   const QByteArray& channelKeyFingerprint,
+                                   int channelIndex) const {
+    if (deviceId.size() != 32) return {};
+    if (channelIndex >= 0 && channelKeyFingerprint.size() != 32) return {};
+    if (channelIndex < 0 && !channelKeyFingerprint.isEmpty()) return {};
+
+    const auto device = byDevice_.constFind(deviceId);
+    if (device == byDevice_.constEnd()) return {};
+    const auto channel = device->constFind(channelKeyFingerprint);
+    if (channel == device->constEnd()) return {};
+
+    QVector<Message> result = *channel;
+    for (Message& msg : result) msg.channelIndex = channelIndex;
+    return result;
 }
 
-void History::append(const Message& msg) {
-    QVector<Message>& msgs = byChannel_[msg.channelIndex];
-    msgs.append(msg);
+void History::append(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
+                     const Message& msg) {
+    if (deviceId.size() != 32) return;
+    if (msg.channelIndex >= 0 &&
+        channelKeyFingerprint.size() !=
+            QCryptographicHash::hashLength(QCryptographicHash::Sha256))
+        return;
+    if (msg.channelIndex < 0 && !channelKeyFingerprint.isEmpty()) return;
+
+    Message stored = msg;
+    stored.channelIndex = channelKeyFingerprint.isEmpty() ? -1 : 0;
+    QVector<Message>& msgs = byDevice_[deviceId][channelKeyFingerprint];
+    msgs.append(stored);
     if (msgs.size() > MaxPerChannel) msgs.remove(0, msgs.size() - MaxPerChannel);
 
-    appendLine(msg);
+    appendLine(deviceId, channelKeyFingerprint, stored);
     if (linesOnDisk_ > CompactThreshold) compact();
 }
 
-void History::remove(int channelIndex) {
-    if (byChannel_.remove(channelIndex) == 0) return;
+void History::remove(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint) {
+    if (deviceId.size() != 32 || channelKeyFingerprint.size() != 32) return;
+    auto device = byDevice_.find(deviceId);
+    if (device == byDevice_.end() || device->remove(channelKeyFingerprint) == 0) return;
+    if (device->isEmpty()) byDevice_.erase(device);
     // Dropping lines is a rewrite whatever way it is done, and compact() already
     // writes the file from what is in memory.
     compact();
 }
 
-void History::appendLine(const Message& msg) {
+void History::appendLine(const QByteArray& deviceId,
+                         const QByteArray& channelKeyFingerprint, const Message& msg) {
     QDir().mkpath(QFileInfo(path_).absolutePath());
 
     QFile f(path_);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
-    f.write(QJsonDocument(toJson(msg)).toJson(QJsonDocument::Compact));
+    f.write(QJsonDocument(toJson(deviceId, channelKeyFingerprint, msg))
+                .toJson(QJsonDocument::Compact));
     f.write("\n");
     f.close();
     linesOnDisk_++;
 }
 
 void History::compact() {
-    // Flat chronological order across channels is not required by the reader,
-    // which buckets by "ch" anyway, so grouping per channel is fine and avoids
-    // a merge sort over the whole log.
+    // Flat chronological order across devices and channels is not required by
+    // the reader, which buckets by both identities anyway.
     QDir().mkpath(QFileInfo(path_).absolutePath());
 
     QSaveFile f(path_);
     if (!f.open(QIODevice::WriteOnly)) return;
 
     int written = 0;
-    for (auto it = byChannel_.constBegin(); it != byChannel_.constEnd(); ++it) {
-        for (const Message& m : *it) {
-            f.write(QJsonDocument(toJson(m)).toJson(QJsonDocument::Compact));
-            f.write("\n");
-            written++;
+    for (auto device = byDevice_.constBegin(); device != byDevice_.constEnd(); ++device) {
+        for (auto channel = device->constBegin(); channel != device->constEnd(); ++channel) {
+            for (const Message& m : *channel) {
+                f.write(QJsonDocument(toJson(device.key(), channel.key(), m))
+                            .toJson(QJsonDocument::Compact));
+                f.write("\n");
+                written++;
+            }
         }
     }
     // QSaveFile replaces atomically, so a crash mid-compaction leaves the old

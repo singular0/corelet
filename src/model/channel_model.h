@@ -21,6 +21,7 @@ public:
         TypeRole,          // model::ChannelType
         LastActivityRole,  // QDateTime of the newest message, invalid if none
         PreviewRole,       // "sender: text" for that message, empty if none
+        KeyFingerprintRole,
     };
 
     explicit ChannelModel(QObject* parent = nullptr);
@@ -29,9 +30,16 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
 
     void setChannels(const QVector<Channel>& channels);
+    // Called when the window leaves one device identity. Public and hashtag
+    // keys can exist on many devices, so even key-based UI state must not cross
+    // the outer device boundary.
+    void clearTransientState();
     // Row for a daemon slot number, or -1 if that slot is not configured.
     int rowForIndex(int channelIndex) const;
+    // Row for the key-derived persistent identity, independent of its slot.
+    int rowForKey(const QByteArray& keyFingerprint) const;
     int channelIndexForRow(int row) const;
+    QByteArray keyForIndex(int channelIndex) const;
 
     // The newest message in a channel, reduced to the two things the sidebar
     // draws. Kept here rather than read from History on demand so a row repaint
@@ -40,10 +48,8 @@ public:
     void setLastMessage(int channelIndex, const Message& msg);
     void bumpUnread(int channelIndex);
     void clearUnread(int channelIndex);
-    // Drops everything held for a slot. Unread counts and previews are keyed by
-    // slot precisely so they survive a re-enumeration, so a channel that is gone
-    // for good has to say so or the next tenant of the slot inherits them.
-    void forget(int channelIndex);
+    // Drops the transient state held for a channel that has been removed.
+    void forget(const QByteArray& keyFingerprint);
 
 private:
     struct LastMessage {
@@ -52,8 +58,8 @@ private:
     };
 
     QVector<Channel> channels_;
-    QHash<int, int> unread_;
-    QHash<int, LastMessage> last_;
+    QHash<QByteArray, int> unread_;
+    QHash<QByteArray, LastMessage> last_;
 };
 
 }  // namespace model

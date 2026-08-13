@@ -79,11 +79,18 @@ void CompanionClient::start(Transport* transport) {
 }
 
 void CompanionClient::stop() {
+    const bool wasRunning = running_;
     running_ = false;
     reconnectTimer_->stop();
     if (transport_) transport_->close();
     resetConnection();
-    setState(State::Disconnected);
+    // Stopping the retry loop is user-visible even if its most recent attempt
+    // had already put the state in Disconnected. Listeners still need to turn
+    // a Disconnect action back into Connect.
+    if (wasRunning && state_ == State::Disconnected)
+        Q_EMIT stateChanged(State::Disconnected, {});
+    else
+        setState(State::Disconnected);
 }
 
 void CompanionClient::reconnect() {

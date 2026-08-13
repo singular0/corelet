@@ -55,6 +55,7 @@ public:
     void stop();
 
     State state() const { return state_; }
+    bool isRunning() const { return running_; }
     const DeviceInfo& device() const { return device_; }
     const QVector<model::Channel>& channels() const { return channels_; }
 

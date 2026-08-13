@@ -34,12 +34,12 @@ outcome and gives feedback. Report what changed and hand it over.
 
 On macOS `QStandardPaths::AppDataLocation` and `QSettings` resolve through Foundation, **not**
 `$HOME`. Launching with `HOME=/scratch` still writes to the real
-`~/Library/Application Support/umeshcore/umeshcore-app/history.jsonl` and
+`~/Library/Application Support/umeshcore/umeshcore-app/history-v2.jsonl` and
 `~/Library/Preferences/com.umeshcore.umeshcore-app.plist`. That history file is the *only* copy of
 received messages (see below), so a run against a stub daemon destroys real user data.
 
 Combined with the rule above, there is essentially no reason to run the binary unprompted. If the
-maintainer asks for a run, back up `history.jsonl` first.
+maintainer asks for a run, back up `history-v2.jsonl` first.
 
 ```sh
 ./build/umeshcore-app --host 10.0.0.4 --port 5099   # skips the connect dialog
@@ -70,10 +70,11 @@ Violating any of these produces bugs that only show up against a real device:
 - **Pushes (code `>= 0x80`) are interleaved** with replies and are routed in `handlePush` before the
   queue is consulted. `PUSH_MSG_WAITING` is what triggers message collection.
 - **`SYNC_NEXT_MESSAGE` pops** from the daemon's inbox. The daemon is not storage; whatever the app
-  collects it must persist to `history.jsonl` or the message is gone. This includes direct messages,
+  collects it must persist to `history-v2.jsonl` or the message is gone. This includes direct messages,
   which have no view yet but are still stored under channel `-1`.
-- **A channel's slot number is its identity**, never its row. `GET_CHANNEL` answers for all 8 slots
-  and unused ones have an all-zero key; slots are sparse, and rows shift on re-enumeration.
+- **A channel's slot number is only its current wire address**, never its persistent identity or
+  row. `GET_CHANNEL` answers for all 8 slots and unused ones have an all-zero key; slots are sparse,
+  and rows shift on re-enumeration. Persistent state uses a fingerprint of the channel key.
 - **The wire says nothing about channel kind.** `ChannelType` is deduced in
   `model::Channel::classify` from the key, mirroring how the daemon builds them (constant public
   key, SHA-256 of the name including `#` for hashtags). The offline cache stores the resolved type,
@@ -90,12 +91,14 @@ Violating any of these produces bugs that only show up against a real device:
 
 ### Persistent state
 
-- `history.jsonl` under `QStandardPaths::AppDataLocation` — append-one-line-per-message, capped at
-  `History::MaxPerChannel` (500) with a whole-file compaction. One file is shared by every link,
-  keyed only by channel slot.
-- `QSettings` (org `umeshcore`, app `umeshcore-app`) holds `geometry`, `splitter`, `channel`,
-  `channelCache` (index/name/type, unit-separator joined — names only, keys stay in the daemon) and
-  the `connection/*` target.
+- `history-v2.jsonl` under `QStandardPaths::AppDataLocation` — append-one-line-per-message, capped
+  at `History::MaxPerChannel` (500) with a whole-file compaction. Every entry is keyed first by the
+  device public key and then by a SHA-256 fingerprint of the channel key. The legacy unscoped
+  `history.jsonl` is left untouched and is not loaded.
+- `QSettings` (org `umeshcore`, app `umeshcore-app`) holds global `geometry`, `splitter` and the
+  `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
+  below that are keyed by channel-key fingerprint and the selected channel is stored by the same
+  fingerprint. The secret channel keys stay in the daemon.
 
 ## Git
 
