@@ -6,5 +6,6 @@
         <file>hash.svg</file>
         <file>plus.svg</file>
         <file>minus.svg</file>
+        <file>share.svg</file>
     </qresource>
 </RCC>

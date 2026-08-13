@@ -53,6 +53,8 @@ private:
     void connectTo(const proto::ConnectTarget& target);
     void openConnectDialog();
     void openAddChannelDialog();
+    // Shows the selected channel's key, to pass on to whoever is being invited.
+    void shareCurrentChannel();
     // Asks first: this deletes the key from the device, and a private channel
     // cannot be got back without a copy of it.
     void removeCurrentChannel();
@@ -89,6 +91,7 @@ private:
     QSplitter* splitter_ = nullptr;
     QListView* channelList_ = nullptr;
     QToolButton* addChannelButton_ = nullptr;
+    QToolButton* shareChannelButton_ = nullptr;
     QToolButton* removeChannelButton_ = nullptr;
     // Foot of the sidebar: the node, the link, and the way to the connect
     // dialog. There is no status bar and no menu bar to put any of that in.

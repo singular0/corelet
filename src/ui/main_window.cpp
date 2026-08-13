@@ -25,6 +25,7 @@
 #include "ui/icons.h"
 #include "ui/message_delegate.h"
 #include "ui/node_pane.h"
+#include "ui/share_channel_dialog.h"
 #include "ui/theme.h"
 
 namespace {
@@ -198,6 +199,16 @@ void MainWindow::openAddChannelDialog() {
     client_->setChannel(ch.index, ch.name, ch.secret);
 }
 
+void MainWindow::shareCurrentChannel() {
+    // Only the device's list carries keys, and a key is the entire invitation:
+    // the cached list the sidebar falls back on while offline has nothing to
+    // share.
+    const std::optional<model::Channel> ch = currentChannelOnDevice();
+    if (!ch) return;
+
+    ShareChannelDialog(*ch, this).exec();
+}
+
 void MainWindow::removeCurrentChannel() {
     // Taken by value: the dialog below runs an event loop, and a reconnect
     // re-enumerating the channels underneath it would leave a reference to the
@@ -254,12 +265,14 @@ void MainWindow::buildUi() {
 
     const qreal dpr = devicePixelRatioF();
     addChannelButton_ = headerButton(QStringLiteral("plus"), theme::Accent, dpr);
-    // The minus acts on the selected row rather than carrying a row of its own:
-    // a per-row delete button would cost sidebar width the uConsole has not got,
-    // and hover affordances are no use on a trackball.
+    // Share and remove both act on the selected row rather than carrying one of
+    // their own: per-row buttons would cost sidebar width the uConsole has not
+    // got, and hover affordances are no use on a trackball.
+    shareChannelButton_ = headerButton(QStringLiteral("share"), theme::Accent, dpr);
     removeChannelButton_ = headerButton(QStringLiteral("minus"), theme::Error, dpr);
 
     channelsHeaderLayout->addWidget(channelsTitle, 1);
+    channelsHeaderLayout->addWidget(shareChannelButton_);
     channelsHeaderLayout->addWidget(removeChannelButton_);
     channelsHeaderLayout->addWidget(addChannelButton_);
 
@@ -353,6 +366,7 @@ void MainWindow::buildUi() {
 
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
+    connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             &MainWindow::onChannelSelected);
@@ -668,6 +682,15 @@ void MainWindow::updateChannelActions() {
                                          : QStringLiteral("Connect to add a channel"));
 
     const std::optional<model::Channel> current = currentChannelOnDevice();
+    // Any channel can be shared, including the public ones nobody needs an
+    // invitation to: what stops it is not having the key, which is the case
+    // whenever the list on screen came from the offline cache.
+    shareChannelButton_->setEnabled(current.has_value());
+    shareChannelButton_->setToolTip(
+        !ready     ? QStringLiteral("Connect to share a channel")
+        : !current ? QStringLiteral("Select a channel to share")
+                   : QStringLiteral("Share %1").arg(current->displayName()));
+
     const bool removable = current && isRemovable(*current);
     removeChannelButton_->setEnabled(removable);
     removeChannelButton_->setToolTip(
