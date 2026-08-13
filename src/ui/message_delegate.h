@@ -33,10 +33,15 @@ private:
         QRect text;
         QRect avatar;     // empty for our own messages, which carry no sender
         QRect separator;  // empty unless this row starts a new day
+        QRect mark;       // send state; empty for anything we did not send
     };
 
     Layout layoutFor(const QModelIndex& index, int width) const;
     QString metaText(const QModelIndex& index, int availableWidth) const;
+    // Ring or tick, drawn rather than written: a bare Debian install is not
+    // guaranteed a font with U+2713 in it, and two strokes cost less per row
+    // than laying out another piece of text.
+    void paintMark(QPainter* painter, const QRect& mark, bool pending) const;
 
     // What to draw inside the disc: the sender's own emoji if their name has
     // one, otherwise its first letter. Memoised because a channel is a handful

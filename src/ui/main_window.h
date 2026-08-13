@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QMainWindow>
 
 #include "model/history.h"
@@ -41,7 +42,7 @@ private Q_SLOTS:
     void onChannelsChanged(const QVector<model::Channel>& channels);
     void onMessageReceived(const model::Message& msg);
     void onDirectMessageReceived(const model::Message& msg);
-    void onSendResult(int channelIndex, const QString& text, bool ok, const QString& error);
+    void onSendResult(int token, bool ok, const QString& error);
     void onChannelSaveResult(int channelIndex, bool ok, const QString& error);
 
 private:
@@ -93,4 +94,10 @@ private:
     // rows shift when channels are re-enumerated after a reconnect.
     int currentChannel_ = -1;
     int directMessageCount_ = 0;
+
+    // Sends the daemon has not answered yet, by the tag the app gave them. They
+    // are on screen but not in history: a message is written down only once it
+    // is known to have got somewhere.
+    QHash<int, model::Message> pendingSends_;
+    int lastSendToken_ = 0;
 };

@@ -25,6 +25,12 @@ constexpr int MinBubbleWidth = 90;
 // Same disc as a sidebar row's channel icon, so the two lists read as one app.
 constexpr int AvatarSize = 30;
 constexpr int AvatarGap = 8;
+// The send mark sits at the end of the header line on our own messages. It is
+// the same width in either state, so a message being taken by the daemon is a
+// repaint and not a relayout.
+constexpr int MarkSize = 8;
+constexpr int MarkGap = 5;
+constexpr int MarkAllowance = MarkSize + MarkGap;
 
 // Bubbles stop well short of the full width so that the left/right alignment
 // stays readable as "who said this", and so long lines do not run the whole
@@ -151,11 +157,12 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     QRect textBounds =
         bodyFm.boundingRect(QRect(0, 0, maxContent, 0), Qt::TextWordWrap, text);
 
+    const int markAllowance = outgoing ? MarkAllowance : 0;
     const QString name = outgoing ? QString() : sender;
-    const QString meta = metaText(index, maxContent);
+    const QString meta = metaText(index, maxContent - markAllowance);
     // The header is sender on the left and metadata on the right, on one line,
     // so a short message costs two lines rather than three.
-    int headerWidth = headerFm.horizontalAdvance(meta);
+    int headerWidth = headerFm.horizontalAdvance(meta) + markAllowance;
     if (!name.isEmpty()) headerWidth += headerFm.horizontalAdvance(name) + 12;
 
     const int contentWidth = qMax(qMin(textBounds.width(), maxContent), headerWidth);
@@ -177,9 +184,30 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     // text.
     if (hasAvatar) l.avatar = QRect(MarginX, y, AvatarSize, AvatarSize);
     l.header = QRect(x + PadX, y + PadY, bubbleWidth - 2 * PadX, headerHeight);
+    if (outgoing)
+        l.mark = QRect(l.header.x() + l.header.width() - MarkSize,
+                       l.header.y() + (headerHeight - MarkSize) / 2, MarkSize, MarkSize);
     l.text = QRect(x + PadX, l.header.bottom() + 1 + HeaderGap, bubbleWidth - 2 * PadX,
                    textBounds.height());
     return l;
+}
+
+void MessageDelegate::paintMark(QPainter* painter, const QRect& mark, bool pending) const {
+    QPen pen(pending ? theme::TextMuted : theme::Accent, 1.4);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(pen);
+    painter->setBrush(Qt::NoBrush);
+
+    const QRectF m(mark);
+    if (pending) {
+        // An empty ring: the send is on its way and nothing has confirmed it.
+        painter->drawEllipse(m.adjusted(1, 1, -1, -1));
+        return;
+    }
+    painter->drawPolyline(QPolygonF {QPointF(m.left(), m.top() + m.height() * 0.55),
+                                     QPointF(m.left() + m.width() * 0.36, m.bottom()),
+                                     QPointF(m.right(), m.top() + m.height() * 0.1)});
 }
 
 QSize MessageDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -227,7 +255,11 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     painter->drawRoundedRect(l.bubble, BubbleRadius, BubbleRadius);
 
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
-    const QString meta = metaText(index, l.header.width());
+    // The mark is drawn where the metadata would otherwise end, so the text is
+    // measured and placed against a header that stops short of it.
+    const QRect headerText =
+        l.mark.isNull() ? l.header : l.header.adjusted(0, 0, -MarkAllowance, 0);
+    const QString meta = metaText(index, headerText.width());
 
     if (!l.avatar.isNull()) {
         // The same colour the name is painted in, so the disc and the header
@@ -247,7 +279,12 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         painter->drawText(l.header, Qt::AlignLeft | Qt::AlignVCenter, sender);
     }
     painter->setPen(theme::TextMuted);
-    painter->drawText(l.header, Qt::AlignRight | Qt::AlignVCenter, meta);
+    painter->drawText(headerText, Qt::AlignRight | Qt::AlignVCenter, meta);
+
+    if (!l.mark.isNull())
+        paintMark(painter, l.mark,
+                  index.data(model::ChatModel::SendStateRole).toInt() ==
+                      int(model::Message::SendState::Pending));
 
     painter->setFont(bodyFont_);
     painter->setPen(theme::Text);

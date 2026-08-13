@@ -21,6 +21,7 @@ public:
         SnrRole,
         HasSignalRole,
         PathLenRole,
+        SendStateRole,
         // True when this row starts a new calendar day, so the delegate can
         // draw a date separator without re-deriving it from its neighbours.
         DayBreakRole,
@@ -35,7 +36,18 @@ public:
     void append(const Message& msg);
     const Message& at(int row) const { return messages_.at(row); }
 
+    // A message echoed optimistically is the only row that changes after it is
+    // inserted: the daemon either takes it, or it never happened and the row
+    // goes away again. Anything that reloads the conversation -- a channel
+    // switch, a reconnect re-enumerating the channels -- drops that row, since
+    // a send still in flight is not in history yet, so markSent() reports
+    // whether it found one and the caller can put the message back.
+    bool markSent(int sendToken);
+    void removePending(int sendToken);
+
 private:
+    int rowForToken(int sendToken) const;
+
     QVector<Message> messages_;
 };
 

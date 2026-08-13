@@ -20,6 +20,7 @@ QVariant ChatModel::data(const QModelIndex& index, int role) const {
         case SnrRole: return m.snr;
         case HasSignalRole: return m.hasSignal;
         case PathLenRole: return m.pathLen;
+        case SendStateRole: return int(m.sendState);
         case DayBreakRole:
             if (index.row() == 0) return true;
             return messages_.at(index.row() - 1).timestamp.date() != m.timestamp.date();
@@ -38,6 +39,36 @@ void ChatModel::append(const Message& msg) {
     beginInsertRows({}, row, row);
     messages_.append(msg);
     endInsertRows();
+}
+
+// Searched from the end: a send in flight is one of the newest rows, and on the
+// common path the first row looked at is the one wanted.
+int ChatModel::rowForToken(int sendToken) const {
+    if (sendToken == 0) return -1;
+    for (int row = int(messages_.size()) - 1; row >= 0; row--)
+        if (messages_.at(row).sendToken == sendToken) return row;
+    return -1;
+}
+
+bool ChatModel::markSent(int sendToken) {
+    const int row = rowForToken(sendToken);
+    if (row < 0) return false;
+
+    messages_[row].sendState = Message::SendState::Sent;
+    messages_[row].sendToken = 0;
+    // The mark is the same width in either state, so this repaints the row
+    // without asking the view to lay it out again.
+    Q_EMIT dataChanged(index(row), index(row), {SendStateRole});
+    return true;
+}
+
+void ChatModel::removePending(int sendToken) {
+    const int row = rowForToken(sendToken);
+    if (row < 0) return;
+
+    beginRemoveRows({}, row, row);
+    messages_.remove(row);
+    endRemoveRows();
 }
 
 }  // namespace model

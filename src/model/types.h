@@ -87,6 +87,14 @@ inline ChannelType channelTypeFromInt(int value) {
 }
 
 struct Message {
+    // How far one of our own sends has got. Meaningless for incoming messages,
+    // and for anything read back from history: the app writes a message down
+    // only once the daemon has taken it, so a stored message is always sent.
+    enum class SendState {
+        Sent,     // the daemon acknowledged the command
+        Pending,  // shown optimistically, still waiting for that answer
+    };
+
     int channelIndex = 0;
     // Channel messages carry no per-sender key, only a name the sender put in
     // the text, so this is unauthenticated and must never be treated as identity.
@@ -94,6 +102,11 @@ struct Message {
     QString text;
     QDateTime timestamp;
     bool outgoing = false;
+    SendState sendState = SendState::Sent;
+    // Ties the row on screen to the answer that will settle it. The protocol
+    // tags nothing, so the app supplies its own tag; it lives only while the
+    // send is in flight and is never persisted.
+    int sendToken = 0;
     // Radio quality of the packet that carried it. Meaningless for our own
     // messages, so `hasSignal` gates display rather than a sentinel value.
     bool hasSignal = false;

@@ -96,11 +96,17 @@ void CompanionClient::reconnect() {
 }
 
 void CompanionClient::resetConnection() {
-    queue_.clear();
+    QQueue<Pending> dropped;
+    dropped.swap(queue_);
     inFlight_ = false;
     syncPending_ = false;
     channelsOutstanding_ = 0;
     replyTimer_->stop();
+
+    // Last, and against an already-clean queue: an abort handler reaches the UI,
+    // which may well answer by starting another command.
+    for (const Pending& p : dropped)
+        if (p.onAbort) p.onAbort();
 }
 
 void CompanionClient::setState(State s, const QString& detail) {
@@ -138,8 +144,9 @@ void CompanionClient::onClosed(const QString& reason) {
 // Command queue
 // ---------------------------------------------------------------------------
 
-void CompanionClient::enqueue(const QByteArray& payload, ReplyHandler handler) {
-    queue_.enqueue(Pending {payload, std::move(handler)});
+void CompanionClient::enqueue(const QByteArray& payload, ReplyHandler handler,
+                              AbortHandler onAbort) {
+    queue_.enqueue(Pending {payload, std::move(handler), std::move(onAbort)});
     pump();
 }
 
@@ -425,9 +432,9 @@ model::Message CompanionClient::parseMessageTail(Reader& r, qint8 snrQ4, int cha
     return msg;
 }
 
-void CompanionClient::sendChannelMessage(int channelIndex, const QString& text) {
+void CompanionClient::sendChannelMessage(int channelIndex, const QString& text, int token) {
     if (state_ != State::Ready) {
-        Q_EMIT sendResult(channelIndex, text, false, QStringLiteral("not connected"));
+        Q_EMIT sendResult(token, false, QStringLiteral("not connected"));
         return;
     }
 
@@ -438,18 +445,21 @@ void CompanionClient::sendChannelMessage(int channelIndex, const QString& text) 
         .u32(quint32(QDateTime::currentSecsSinceEpoch()))
         .tail(text.toUtf8());
 
-    enqueue(w.bytes(), [this, channelIndex, text](quint8 code, Reader& r) {
-        if (code == RespOk) {
-            // A channel message has no addressee and so no ack to wait for;
-            // the daemon's OK means it reached the transmit queue.
-            Q_EMIT sendResult(channelIndex, text, true, {});
-        } else if (code == RespErr) {
-            Q_EMIT sendResult(channelIndex, text, false, errorText(r.u8()));
-        } else {
-            Q_EMIT sendResult(channelIndex, text, false, QStringLiteral("unexpected reply"));
-        }
-        return true;
-    });
+    enqueue(
+        w.bytes(),
+        [this, token](quint8 code, Reader& r) {
+            if (code == RespOk) {
+                // A channel message has no addressee and so no ack to wait for;
+                // the daemon's OK means it reached the transmit queue.
+                Q_EMIT sendResult(token, true, {});
+            } else if (code == RespErr) {
+                Q_EMIT sendResult(token, false, errorText(r.u8()));
+            } else {
+                Q_EMIT sendResult(token, false, QStringLiteral("unexpected reply"));
+            }
+            return true;
+        },
+        [this, token] { Q_EMIT sendResult(token, false, QStringLiteral("connection lost")); });
 }
 
 }  // namespace proto

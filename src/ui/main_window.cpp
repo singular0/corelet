@@ -48,6 +48,9 @@ public:
         if (!model) return;
         connect(model, &QAbstractItemModel::rowsInserted, this,
                 [this] { scheduleAnchor(); });
+        // A row can go away again: a send the daemon refuses is taken back off
+        // the screen, and the conversation has to settle back onto the input box.
+        connect(model, &QAbstractItemModel::rowsRemoved, this, [this] { scheduleAnchor(); });
         connect(model, &QAbstractItemModel::modelReset, this, [this] { scheduleAnchor(); });
     }
 
@@ -499,30 +502,53 @@ void MainWindow::onSendClicked() {
     if (client_->state() != proto::CompanionClient::State::Ready) return;
 
     input_->clear();
-    client_->sendChannelMessage(currentChannel_, text);
-}
 
-void MainWindow::onSendResult(int channelIndex, const QString& text, bool ok,
-                              const QString& error) {
-    if (!ok) {
-        showNotice(QStringLiteral("Could not send: %1").arg(error), 6000, true);
-        // Hand the text back rather than losing it to a failed send.
-        if (input_->text().isEmpty()) input_->setText(text);
-        return;
-    }
-
-    // Our own transmission never comes back to us over the air, so the sent
-    // message is echoed locally or it would never appear in the history.
+    // Our own transmission never comes back to us over the air, so the message
+    // is echoed locally or it would never appear at all. It goes up marked as
+    // pending straight away -- the daemon answering is what a reader is waiting
+    // to know about, and an empty pane while it does says nothing.
     model::Message msg;
-    msg.channelIndex = channelIndex;
+    msg.channelIndex = currentChannel_;
     msg.sender = client_->device().name;
     msg.text = text;
     msg.timestamp = QDateTime::currentDateTime();
     msg.outgoing = true;
+    msg.sendState = model::Message::SendState::Pending;
+    msg.sendToken = ++lastSendToken_;
 
+    // Registered before the command goes out: a send refused on the spot answers
+    // from inside the call below.
+    pendingSends_.insert(msg.sendToken, msg);
+    appendToView(msg);
+    client_->sendChannelMessage(msg.channelIndex, msg.text, msg.sendToken);
+}
+
+void MainWindow::onSendResult(int token, bool ok, const QString& error) {
+    const auto it = pendingSends_.constFind(token);
+    if (it == pendingSends_.constEnd()) return;
+    model::Message msg = *it;
+    pendingSends_.erase(it);
+
+    if (!ok) {
+        // Nothing went out, so nothing stays on screen claiming it did.
+        chatModel_->removePending(token);
+        showNotice(QStringLiteral("Could not send: %1").arg(error), 6000, true);
+        // Hand the text back rather than losing it to a failed send.
+        if (input_->text().isEmpty()) input_->setText(msg.text);
+        return;
+    }
+
+    // Only now is it worth writing down. History is what the app has instead of
+    // the daemon's inbox, and a message that never left has no business in it.
+    msg.sendState = model::Message::SendState::Sent;
+    msg.sendToken = 0;
     history_.append(msg);
-    channelModel_->setLastMessage(channelIndex, msg);
-    if (channelIndex == currentChannel_) appendToView(msg);
+    channelModel_->setLastMessage(msg.channelIndex, msg);
+    // The row it went up as is gone if the conversation was reloaded meanwhile.
+    // Put the message back when that happened to the channel being looked at;
+    // any other channel reads it from history when it is opened.
+    if (!chatModel_->markSent(token) && msg.channelIndex == currentChannel_)
+        appendToView(msg);
 }
 
 void MainWindow::onTextChanged(const QString& text) {
