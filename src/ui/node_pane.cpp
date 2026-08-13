@@ -1,7 +1,15 @@
 #include "ui/node_pane.h"
 
+#include <QAction>
+#include <QClipboard>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QFormLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOption>
@@ -73,6 +81,27 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     title->setFont(headerFont);
     title->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
+    infoButton_ = new QToolButton;
+    infoButton_->setObjectName(QStringLiteral("iconButton"));
+    infoButton_->setIconSize(QSize(14, 14));
+    infoButton_->setAutoRaise(true);
+    infoButton_->setCursor(Qt::PointingHandCursor);
+    infoButton_->setFocusPolicy(Qt::NoFocus);
+    infoButton_->setText(QStringLiteral("Node information"));
+    infoButton_->setToolTip(QStringLiteral("Node information"));
+    QIcon infoIcon;
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::TextMuted,
+                                    devicePixelRatioF()),
+                       QIcon::Normal);
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::Accent,
+                                    devicePixelRatioF()),
+                       QIcon::Active);
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::Border,
+                                    devicePixelRatioF()),
+                       QIcon::Disabled);
+    infoButton_->setIcon(infoIcon);
+    infoButton_->setEnabled(false);
+
     connectionButton_ = new QToolButton;
     connectionButton_->setObjectName(QStringLiteral("iconButton"));
     connectionButton_->setIconSize(QSize(14, 14));
@@ -82,6 +111,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     updateConnectionAction(false);
 
     headerLayout->addWidget(title, 1);
+    headerLayout->addWidget(infoButton_);
     headerLayout->addWidget(connectionButton_);
 
     auto* details = new QWidget;
@@ -111,6 +141,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
         else
             Q_EMIT connectRequested();
     });
+    connect(infoButton_, &QToolButton::clicked, this, &NodePane::showDeviceInfo);
 }
 
 void NodePane::setTarget(const proto::ConnectTarget& target) {
@@ -124,15 +155,98 @@ void NodePane::setTarget(const proto::ConnectTarget& target) {
 }
 
 void NodePane::setDevice(const proto::CompanionClient::DeviceInfo& info) {
+    device_ = info;
     name_->setFullText(info.name.isEmpty() ? QStringLiteral("Node unavailable") : info.name);
     battery_->setFullText(info.batteryPercent < 0
                               ? QStringLiteral("Battery unavailable")
                               : QStringLiteral("%1%").arg(info.batteryPercent));
+    infoButton_->setEnabled(connected_ && info.pubkey.size() == 32);
 }
 
-void NodePane::setConnection(const QString& text, const QColor& color, bool active) {
+void NodePane::showDeviceInfo() {
+    if (device_.pubkey.size() != 32) return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Node information"));
+
+    auto* form = new QFormLayout;
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setSpacing(6);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    const auto addValue = [&form](const QString& name, const QString& value) {
+        auto* label = new QLabel(value);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        form->addRow(name, label);
+    };
+
+    addValue(QStringLiteral("Name"),
+             device_.name.isEmpty() ? QStringLiteral("Unavailable") : device_.name);
+
+    auto* publicKey = new QLineEdit(QString::fromLatin1(device_.pubkey.toHex()));
+    publicKey->setReadOnly(true);
+    publicKey->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    publicKey->setCursorPosition(0);
+    constexpr int CopyIconSize = 16;
+    QIcon copyIcon;
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::TextMuted,
+                                    devicePixelRatioF()),
+                       QIcon::Normal);
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::Text,
+                                    devicePixelRatioF()),
+                       QIcon::Active);
+    QAction* copy = publicKey->addAction(copyIcon, QLineEdit::TrailingPosition);
+    copy->setText(QStringLiteral("Copy public key"));
+    copy->setToolTip(QStringLiteral("Copy public key"));
+    connect(copy, &QAction::triggered, publicKey,
+            [publicKey] { QGuiApplication::clipboard()->setText(publicKey->text()); });
+    form->addRow(QStringLiteral("Public key"), publicKey);
+
+    const QString unavailable = QStringLiteral("Unavailable");
+    addValue(QStringLiteral("Battery voltage"),
+             device_.batteryMillivolts < 0
+                 ? unavailable
+                 : QStringLiteral("%1 V (%2%)")
+                       .arg(device_.batteryMillivolts / 1000.0, 0, 'f', 3)
+                       .arg(device_.batteryPercent));
+    addValue(QStringLiteral("Latitude"),
+             device_.hasLocation
+                 ? QStringLiteral("%1 degrees").arg(device_.latitude, 0, 'f', 6)
+                 : unavailable);
+    addValue(QStringLiteral("Longitude"),
+             device_.hasLocation
+                 ? QStringLiteral("%1 degrees").arg(device_.longitude, 0, 'f', 6)
+                 : unavailable);
+    addValue(QStringLiteral("Radio frequency"),
+             QStringLiteral("%1 MHz").arg(device_.freqMhz, 0, 'f', 3));
+    addValue(QStringLiteral("Bandwidth"),
+             QStringLiteral("%1 kHz").arg(device_.bwKhz, 0, 'f', 3));
+    addValue(QStringLiteral("Spreading factor"), QString::number(device_.sf));
+    addValue(QStringLiteral("Coding rate"), QStringLiteral("4/%1").arg(device_.cr));
+    addValue(QStringLiteral("Transmit power"),
+             QStringLiteral("%1 dBm").arg(device_.txPowerDbm));
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 10, 12, 10);
+    layout->setSpacing(8);
+    layout->addLayout(form);
+    layout->addWidget(buttons);
+
+    // Wide enough to keep the complete 32-byte key visible on one line, while
+    // remaining comfortably inside the uConsole's 1280-pixel display.
+    dialog.setMinimumWidth(640);
+    dialog.exec();
+}
+
+void NodePane::setConnection(const QString& text, const QColor& color, bool active,
+                             bool connected) {
     status_->setFullText(QStringLiteral("● %1").arg(text));
     status_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+    connected_ = connected;
+    infoButton_->setEnabled(connected_ && device_.pubkey.size() == 32);
     if (active == connectionActive_) return;
 
     updateConnectionAction(active);

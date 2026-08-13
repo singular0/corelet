@@ -25,7 +25,8 @@ public:
     // Already-worded link state, coloured by the caller: MainWindow owns the
     // mapping from client state to what the user should read. `active` includes
     // an in-progress connection and the retry loop, both of which can be stopped.
-    void setConnection(const QString& text, const QColor& color, bool active);
+    // `connected` is narrower: only a ready link can expose live node details.
+    void setConnection(const QString& text, const QColor& color, bool active, bool connected);
 
 Q_SIGNALS:
     void connectRequested();
@@ -35,13 +36,17 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    void showDeviceInfo();
     void updateConnectionAction(bool active);
 
+    QToolButton* infoButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;
     QLabel* targetIcon_ = nullptr;
     ElidedLabel* name_ = nullptr;
     ElidedLabel* target_ = nullptr;
     ElidedLabel* battery_ = nullptr;
     ElidedLabel* status_ = nullptr;
+    proto::CompanionClient::DeviceInfo device_;
     bool connectionActive_ = false;
+    bool connected_ = false;
 };

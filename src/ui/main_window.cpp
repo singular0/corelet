@@ -843,7 +843,7 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
             color = theme::Accent;
             break;
     }
-    nodePane_->setConnection(label, color, client_->isRunning());
+    nodePane_->setConnection(label, color, client_->isRunning(), state == State::Ready);
     updateInputState();
     updateChannelActions();
 }

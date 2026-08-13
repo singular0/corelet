@@ -265,10 +265,14 @@ void CompanionClient::beginHandshake() {
 
         DeviceInfo info;
         r.skip(1);  // adv_type
-        info.txPowerDbm = r.u8();
+        info.txPowerDbm = r.i8();
         r.skip(1);  // max tx power
         info.pubkey = r.take(32);
-        r.skip(4 + 4);  // advertised lat/lon
+        const qint32 latE6 = r.i32();
+        const qint32 lonE6 = r.i32();
+        info.hasLocation = latE6 != 0 || lonE6 != 0;
+        info.latitude = latE6 / 1000000.0;
+        info.longitude = lonE6 / 1000000.0;
         r.skip(4);      // multi-acks, location policy, telemetry mode, manual add
         info.freqMhz = r.u32() / 1000.0;
         info.bwKhz = r.u32() / 1000.0;
@@ -337,8 +341,12 @@ void CompanionClient::requestBattery() {
         const quint16 millivolts = r.u16();
         if (!r.ok()) return true;
         const int percent = batteryPercent(millivolts);
-        if (percent == device_.batteryPercent) return true;
+        const int storedMillivolts = millivolts == 0 ? -1 : int(millivolts);
+        if (storedMillivolts == device_.batteryMillivolts &&
+            percent == device_.batteryPercent)
+            return true;
 
+        device_.batteryMillivolts = storedMillivolts;
         device_.batteryPercent = percent;
         Q_EMIT deviceInfoChanged(device_);
         return true;

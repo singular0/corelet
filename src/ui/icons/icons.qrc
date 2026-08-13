@@ -16,5 +16,6 @@
         <file>bluetooth.svg</file>
         <file>server.svg</file>
         <file>battery-medium.svg</file>
+        <file>info.svg</file>
     </qresource>
 </RCC>

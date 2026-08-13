@@ -35,14 +35,20 @@ public:
     struct DeviceInfo {
         QString name;
         QByteArray pubkey;
+        double latitude = 0;
+        double longitude = 0;
+        // SELF_INFO uses 0,0 to mean that the node does not advertise a
+        // location, so coordinates need a presence bit of their own.
+        bool hasLocation = false;
         double freqMhz = 0;
         double bwKhz = 0;
         int sf = 0;
         int cr = 0;
         int txPowerDbm = 0;
         // GET_BATTERY_VOLTAGE supplies millivolts rather than charge state. The
-        // client exposes the percentage the UI needs; -1 means the far end has
-        // no battery reading.
+        // client retains both the raw reading and the percentage the UI needs;
+        // -1 means the far end has no battery reading.
+        int batteryMillivolts = -1;
         int batteryPercent = -1;
     };
 
