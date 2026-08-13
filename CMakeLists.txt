@@ -42,6 +42,7 @@ add_executable(umeshcore-app
     src/ui/message_delegate.cpp
     src/ui/connect_dialog.cpp
     src/ui/add_channel_dialog.cpp
+    src/ui/node_pane.cpp
     src/ui/main_window.cpp
 )
 

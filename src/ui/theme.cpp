@@ -55,14 +55,6 @@ void apply(QApplication& app) {
         }
         QPushButton:hover { background: #5fe0c0; }
         QPushButton:disabled { background: %5; color: %7; }
-        QStatusBar { background: %3; color: %7; border-top: 1px solid %5; }
-        QStatusBar::item { border: none; }
-        /* A link, not a button: it sits in the status bar and must not shout. */
-        QPushButton#statusLink {
-            background: transparent; color: %7; font-weight: normal;
-            padding: 1px 6px; border-radius: 3px;
-        }
-        QPushButton#statusLink:hover { background: %4; color: %2; }
         QTabWidget::pane { border: 1px solid %5; border-radius: 3px; }
         QTabBar::tab {
             background: transparent; color: %7; padding: 5px 12px;
@@ -82,6 +74,12 @@ void apply(QApplication& app) {
         /* Same strip as QLabel#header, but a container: the sidebar's title
            shares it with the add-channel button. */
         QWidget#sidebarHeader { border-bottom: 1px solid %5; }
+        /* Closes the sidebar column the way the header opens it. There is no
+           status bar, so this is where the link and the node it reaches live. */
+        QWidget#nodePane { border-top: 1px solid %5; }
+        /* A passing line above the message box, shown only while it has
+           something to say; lined up with the input row it interrupts. */
+        QLabel#notice { padding: 3px 10px; }
         /* Icon-only, and quiet until it is pointed at: the icon carries the
            colour, so the button contributes no chrome of its own. */
         QToolButton#iconButton {

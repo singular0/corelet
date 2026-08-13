@@ -10,8 +10,11 @@ class QLineEdit;
 class QListView;
 class QPushButton;
 class QSplitter;
+class QTimer;
 class QToolButton;
+class ElidedLabel;
 class MessageDelegate;
+class NodePane;
 
 namespace model {
 class ChannelModel;
@@ -58,6 +61,11 @@ private:
     // free slot to write into.
     void updateChannelActions();
     void updateHeader();
+    // A passing word above the message box -- a failed send, a channel being
+    // added. It costs no vertical space while there is nothing to say, which is
+    // why this is not a permanent strip.
+    void showNotice(const QString& text, int ms, bool error = false);
+    void hideNotice();
 
     proto::CompanionClient* client_ = nullptr;
     proto::ConnectTarget target_;
@@ -70,15 +78,16 @@ private:
     QSplitter* splitter_ = nullptr;
     QListView* channelList_ = nullptr;
     QToolButton* addChannelButton_ = nullptr;
+    // Foot of the sidebar: the node, the link, and the way to the connect
+    // dialog. There is no status bar and no menu bar to put any of that in.
+    NodePane* nodePane_ = nullptr;
     QListView* chatView_ = nullptr;
     QLabel* header_ = nullptr;
     QLineEdit* input_ = nullptr;
     QPushButton* sendButton_ = nullptr;
     QLabel* charCount_ = nullptr;
-    QLabel* connectionLabel_ = nullptr;
-    // Names the current target and reopens the connect dialog. There is no menu
-    // bar to hang a Connect action off, and 480 rows is no place to grow one.
-    QPushButton* targetButton_ = nullptr;
+    ElidedLabel* notice_ = nullptr;
+    QTimer* noticeTimer_ = nullptr;
 
     // Daemon slot number of the open conversation, or -1 for none. Not a row:
     // rows shift when channels are re-enumerated after a reconnect.

@@ -11,7 +11,6 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStandardPaths>
-#include <QStatusBar>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -21,8 +20,10 @@
 #include "ui/add_channel_dialog.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
+#include "ui/elided_label.h"
 #include "ui/icons.h"
 #include "ui/message_delegate.h"
+#include "ui/node_pane.h"
 #include "ui/theme.h"
 
 namespace {
@@ -139,7 +140,7 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     // at a second node mixes its channels into the same history file. v1
     // assumes one radio, which is what a companion app usually is.
     target_ = target;
-    targetButton_->setText(target.label());
+    nodePane_->setTarget(target.label());
     client_->start(proto::createTransport(target));
 }
 
@@ -159,7 +160,7 @@ void MainWindow::openAddChannelDialog() {
     if (dialog.exec() != QDialog::Accepted) return;
 
     const model::Channel ch = dialog.channel();
-    statusBar()->showMessage(QStringLiteral("Adding %1...").arg(ch.displayName()), 10000);
+    showNotice(QStringLiteral("Adding %1...").arg(ch.displayName()), 10000);
     client_->setChannel(ch.index, ch.name, ch.secret);
 }
 
@@ -219,8 +220,11 @@ void MainWindow::buildUi() {
     channelList_->setSelectionMode(QAbstractItemView::SingleSelection);
     channelList_->setFocusPolicy(Qt::NoFocus);
 
+    nodePane_ = new NodePane;
+
     leftLayout->addWidget(channelsHeader);
     leftLayout->addWidget(channelList_, 1);
+    leftLayout->addWidget(nodePane_);
 
     // --- chat ---------------------------------------------------------------
     auto* right = new QWidget;
@@ -270,8 +274,20 @@ void MainWindow::buildUi() {
     inputLayout->addWidget(charCount_);
     inputLayout->addWidget(sendButton_);
 
+    // Sits above the message box, where the eye already is when a send fails,
+    // and takes no room at all the rest of the time.
+    notice_ = new ElidedLabel;
+    notice_->setObjectName(QStringLiteral("notice"));
+    notice_->setFont(countFont);
+    notice_->hide();
+
+    noticeTimer_ = new QTimer(this);
+    noticeTimer_->setSingleShot(true);
+    connect(noticeTimer_, &QTimer::timeout, notice_, &QWidget::hide);
+
     rightLayout->addWidget(header_);
     rightLayout->addWidget(chatView_, 1);
+    rightLayout->addWidget(notice_);
     rightLayout->addWidget(inputRow);
 
     splitter_ = new QSplitter(Qt::Horizontal);
@@ -283,21 +299,7 @@ void MainWindow::buildUi() {
     splitter_->setSizes({210, 800});
     setCentralWidget(splitter_);
 
-    targetButton_ = new QPushButton;
-    targetButton_->setObjectName(QStringLiteral("statusLink"));
-    targetButton_->setToolTip(QStringLiteral("Connect to a different daemon or device"));
-    targetButton_->setCursor(Qt::PointingHandCursor);
-    targetButton_->setFocusPolicy(Qt::NoFocus);
-    // Not a default button: Return in the message box is for sending.
-    targetButton_->setAutoDefault(false);
-
-    connectionLabel_ = new QLabel;
-    connectionLabel_->setContentsMargins(0, 0, 8, 0);
-    statusBar()->addPermanentWidget(targetButton_);
-    statusBar()->addPermanentWidget(connectionLabel_);
-    statusBar()->setSizeGripEnabled(false);
-
-    connect(targetButton_, &QPushButton::clicked, this, &MainWindow::openConnectDialog);
+    connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             &MainWindow::onChannelSelected);
@@ -387,13 +389,13 @@ void MainWindow::showChannels(const QVector<model::Channel>& channels) {
 
 void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& error) {
     if (!ok) {
-        statusBar()->showMessage(QStringLiteral("Could not add the channel: %1").arg(error), 8000);
+        showNotice(QStringLiteral("Could not add the channel: %1").arg(error), 8000, true);
         return;
     }
 
     // The sidebar was rebuilt before this arrived, so the slot is there to open.
     // The user asked for it a moment ago; showing it is what they meant.
-    statusBar()->clearMessage();
+    hideNotice();
     selectChannel(channelIndex);
     updateChannelActions();
 }
@@ -435,18 +437,25 @@ void MainWindow::updateHeader() {
         return;
     }
 
+    // Only the conversation's own name: who we are and what the radio is doing
+    // belong to the node pane, which says it once instead of on every channel.
     const int row = channelModel_->rowForIndex(currentChannel_);
     const QString name = channelModel_->data(channelModel_->index(row),
                                              model::ChannelModel::NameRole).toString();
-    const proto::CompanionClient::DeviceInfo& dev = client_->device();
-    QString detail;
-    if (!dev.name.isEmpty()) {
-        detail = QStringLiteral("  <span style='color:%1'>you are %2 · %3 MHz SF%4</span>")
-                     .arg(theme::TextMuted.name(), dev.name.toHtmlEscaped())
-                     .arg(dev.freqMhz, 0, 'f', 3)
-                     .arg(dev.sf);
-    }
-    header_->setText(QStringLiteral("<b>%1</b>%2").arg(name.toHtmlEscaped(), detail));
+    header_->setText(QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped()));
+}
+
+void MainWindow::showNotice(const QString& text, int ms, bool error) {
+    notice_->setStyleSheet(
+        QStringLiteral("color: %1;").arg((error ? theme::Error : theme::TextMuted).name()));
+    notice_->setFullText(text);
+    notice_->show();
+    noticeTimer_->start(ms);
+}
+
+void MainWindow::hideNotice() {
+    noticeTimer_->stop();
+    notice_->hide();
 }
 
 // ---------------------------------------------------------------------------
@@ -469,10 +478,9 @@ void MainWindow::onDirectMessageReceived(const model::Message& msg) {
     // history file under channel -1, ready for whenever DMs are built out.
     history_.append(msg);
     directMessageCount_++;
-    statusBar()->showMessage(
-        QStringLiteral("%1 direct message(s) received and saved — no DM view yet")
-            .arg(directMessageCount_),
-        8000);
+    showNotice(QStringLiteral("%1 direct message(s) received and saved — no DM view yet")
+                   .arg(directMessageCount_),
+               8000);
 }
 
 void MainWindow::appendToView(const model::Message& msg) {
@@ -497,7 +505,7 @@ void MainWindow::onSendClicked() {
 void MainWindow::onSendResult(int channelIndex, const QString& text, bool ok,
                               const QString& error) {
     if (!ok) {
-        statusBar()->showMessage(QStringLiteral("Could not send: %1").arg(error), 6000);
+        showNotice(QStringLiteral("Could not send: %1").arg(error), 6000, true);
         // Hand the text back rather than losing it to a failed send.
         if (input_->text().isEmpty()) input_->setText(text);
         return;
@@ -575,8 +583,7 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
             color = theme::Accent;
             break;
     }
-    connectionLabel_->setText(QStringLiteral("● %1").arg(label));
-    connectionLabel_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+    nodePane_->setConnection(label, color);
     updateInputState();
     updateChannelActions();
 }
@@ -584,5 +591,5 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
 void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
     setWindowTitle(info.name.isEmpty() ? QStringLiteral("MeshCore")
                                        : QStringLiteral("MeshCore — %1").arg(info.name));
-    updateHeader();
+    nodePane_->setDevice(info);
 }
