@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <optional>
 
 #include "model/history.h"
 #include "protocol/client.h"
@@ -44,6 +45,7 @@ private Q_SLOTS:
     void onDirectMessageReceived(const model::Message& msg);
     void onSendResult(int token, bool ok, const QString& error);
     void onChannelSaveResult(int channelIndex, bool ok, const QString& error);
+    void onChannelRemoveResult(int channelIndex, bool ok, const QString& error);
 
 private:
     void buildUi();
@@ -51,15 +53,23 @@ private:
     void connectTo(const proto::ConnectTarget& target);
     void openConnectDialog();
     void openAddChannelDialog();
+    // Asks first: this deletes the key from the device, and a private channel
+    // cannot be got back without a copy of it.
+    void removeCurrentChannel();
     // Shows a channel list, from the device or from the offline cache.
     void showChannels(const QVector<model::Channel>& channels);
     void loadCachedChannels();
     void selectChannel(int channelIndex);
     void showChannel(int channelIndex);
+    // The selected channel as the device holds it -- with its key, and so with
+    // its real type, which the offline cache cannot give. Empty when nothing is
+    // selected or the link is down, which is also when nothing can be done to it.
+    std::optional<model::Channel> currentChannelOnDevice() const;
     void appendToView(const model::Message& msg);
     void updateInputState();
-    // Adding a channel is a write to the device, so it needs a live link and a
-    // free slot to write into.
+    // Adding and removing a channel are both writes to the device, so they need
+    // a live link -- and a free slot to write into, or a removable channel
+    // selected.
     void updateChannelActions();
     void updateHeader();
     // A passing word above the message box -- a failed send, a channel being
@@ -79,6 +89,7 @@ private:
     QSplitter* splitter_ = nullptr;
     QListView* channelList_ = nullptr;
     QToolButton* addChannelButton_ = nullptr;
+    QToolButton* removeChannelButton_ = nullptr;
     // Foot of the sidebar: the node, the link, and the way to the connect
     // dialog. There is no status bar and no menu bar to put any of that in.
     NodePane* nodePane_ = nullptr;

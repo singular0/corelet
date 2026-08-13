@@ -40,6 +40,10 @@ public:
     void setLastMessage(int channelIndex, const Message& msg);
     void bumpUnread(int channelIndex);
     void clearUnread(int channelIndex);
+    // Drops everything held for a slot. Unread counts and previews are keyed by
+    // slot precisely so they survive a re-enumeration, so a channel that is gone
+    // for good has to say so or the next tenant of the slot inherits them.
+    void forget(int channelIndex);
 
 private:
     struct LastMessage {

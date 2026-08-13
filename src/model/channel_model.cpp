@@ -66,6 +66,12 @@ void ChannelModel::bumpUnread(int channelIndex) {
     if (row >= 0) Q_EMIT dataChanged(index(row), index(row), {UnreadRole});
 }
 
+void ChannelModel::forget(int channelIndex) {
+    // No dataChanged: this is called for a slot the list no longer has a row for.
+    unread_.remove(channelIndex);
+    last_.remove(channelIndex);
+}
+
 void ChannelModel::clearUnread(int channelIndex) {
     if (unread_.value(channelIndex, 0) == 0) return;
     unread_[channelIndex] = 0;

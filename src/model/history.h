@@ -32,6 +32,11 @@ public:
 
     const QVector<Message>& messages(int channelIndex) const;
     void append(const Message& msg);
+    // Forgets a channel's messages, on disk as well as in memory. The slot
+    // number is the only key history has, so a slot that is emptied and later
+    // filled with a different channel would otherwise open showing a
+    // conversation nobody on the new channel ever had.
+    void remove(int channelIndex);
 
 private:
     void appendLine(const Message& msg);

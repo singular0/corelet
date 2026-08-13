@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
@@ -31,6 +32,34 @@ namespace {
 QString historyPath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
            QStringLiteral("/history.jsonl");
+}
+
+// Every node ships with the Public channel and it is how a stranger is reached
+// at all, so it stays where it is. It also costs nothing to keep: its key is a
+// constant, not something the user could lose.
+bool isRemovable(const model::Channel& ch) {
+    return ch.type != model::ChannelType::Public;
+}
+
+// A channel action in the sidebar header. One SVG rendered in three colours:
+// QIcon picks the mode itself, which is cheaper than restyling the button on
+// hover and enable changes. `hover` is what the action means -- the accent for
+// adding, the error colour for anything that takes something away.
+QToolButton* headerButton(const QString& icon, const QColor& hover, qreal dpr) {
+    constexpr int IconSize = 14;
+    QIcon set;
+    set.addPixmap(icons::tinted(icon, IconSize, theme::TextMuted, dpr), QIcon::Normal);
+    set.addPixmap(icons::tinted(icon, IconSize, hover, dpr), QIcon::Active);
+    set.addPixmap(icons::tinted(icon, IconSize, theme::Border, dpr), QIcon::Disabled);
+
+    auto* button = new QToolButton;
+    button->setObjectName(QStringLiteral("iconButton"));
+    button->setIcon(set);
+    button->setIconSize(QSize(IconSize, IconSize));
+    button->setAutoRaise(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::NoFocus);
+    return button;
 }
 
 // A chat reads from the bottom, so a conversation shorter than the window has
@@ -124,6 +153,8 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     connect(client_, &proto::CompanionClient::sendResult, this, &MainWindow::onSendResult);
     connect(client_, &proto::CompanionClient::channelSaveResult, this,
             &MainWindow::onChannelSaveResult);
+    connect(client_, &proto::CompanionClient::channelRemoveResult, this,
+            &MainWindow::onChannelRemoveResult);
 
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
@@ -167,6 +198,36 @@ void MainWindow::openAddChannelDialog() {
     client_->setChannel(ch.index, ch.name, ch.secret);
 }
 
+void MainWindow::removeCurrentChannel() {
+    // Taken by value: the dialog below runs an event loop, and a reconnect
+    // re-enumerating the channels underneath it would leave a reference to the
+    // client's vector dangling.
+    const std::optional<model::Channel> ch = currentChannelOnDevice();
+    if (!ch || !isRemovable(*ch)) return;
+
+    // The key lives on the device and nowhere else -- the app caches names only
+    // -- so this is the last chance to say so.
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(QStringLiteral("Remove channel"));
+    box.setText(QStringLiteral("Remove \"%1\"?").arg(ch->displayName()));
+    box.setInformativeText(
+        ch->type == model::ChannelType::Private
+            ? QStringLiteral("The key is deleted from the device and its messages are removed "
+                             "from this app. Without a copy of the key the channel cannot be "
+                             "joined again.")
+            : QStringLiteral("The channel is deleted from the device and its messages are "
+                             "removed from this app. It can be added again at any time."));
+    QPushButton* confirm = box.addButton(QStringLiteral("Remove"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != confirm) return;
+
+    showNotice(QStringLiteral("Removing %1...").arg(ch->displayName()), 10000);
+    client_->clearChannel(ch->index);
+}
+
 void MainWindow::buildUi() {
     // --- channel list -------------------------------------------------------
     auto* left = new QWidget;
@@ -174,9 +235,9 @@ void MainWindow::buildUi() {
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->setSpacing(0);
 
-    // The title and the add button share the header strip: at 480 rows there is
-    // no menu bar and no room for a toolbar, so the one channel action lives
-    // beside the label it belongs to.
+    // The title and the channel actions share the header strip: at 480 rows
+    // there is no menu bar and no room for a toolbar, so they live beside the
+    // label they belong to.
     auto* channelsHeader = new QWidget;
     channelsHeader->setObjectName(QStringLiteral("sidebarHeader"));
     auto* channelsHeaderLayout = new QHBoxLayout(channelsHeader);
@@ -191,27 +252,15 @@ void MainWindow::buildUi() {
     channelsTitle->setFont(headerFont);
     channelsTitle->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
-    // One SVG rendered in three colours: QIcon picks the mode itself, which is
-    // cheaper than restyling the button on hover and enable changes.
-    constexpr int PlusSize = 14;
     const qreal dpr = devicePixelRatioF();
-    QIcon plus;
-    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::TextMuted, dpr),
-                   QIcon::Normal);
-    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::Accent, dpr),
-                   QIcon::Active);
-    plus.addPixmap(icons::tinted(QStringLiteral("plus"), PlusSize, theme::Border, dpr),
-                   QIcon::Disabled);
-
-    addChannelButton_ = new QToolButton;
-    addChannelButton_->setObjectName(QStringLiteral("iconButton"));
-    addChannelButton_->setIcon(plus);
-    addChannelButton_->setIconSize(QSize(PlusSize, PlusSize));
-    addChannelButton_->setAutoRaise(true);
-    addChannelButton_->setCursor(Qt::PointingHandCursor);
-    addChannelButton_->setFocusPolicy(Qt::NoFocus);
+    addChannelButton_ = headerButton(QStringLiteral("plus"), theme::Accent, dpr);
+    // The minus acts on the selected row rather than carrying a row of its own:
+    // a per-row delete button would cost sidebar width the uConsole has not got,
+    // and hover affordances are no use on a trackball.
+    removeChannelButton_ = headerButton(QStringLiteral("minus"), theme::Error, dpr);
 
     channelsHeaderLayout->addWidget(channelsTitle, 1);
+    channelsHeaderLayout->addWidget(removeChannelButton_);
     channelsHeaderLayout->addWidget(addChannelButton_);
 
     channelModel_ = new model::ChannelModel(this);
@@ -304,6 +353,7 @@ void MainWindow::buildUi() {
 
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
+    connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             &MainWindow::onChannelSelected);
     connect(sendButton_, &QPushButton::clicked, this, &MainWindow::onSendClicked);
@@ -384,8 +434,14 @@ void MainWindow::showChannels(const QVector<model::Channel>& channels) {
     if (channelModel_->rowForIndex(wanted) < 0)
         wanted = channels.isEmpty() ? -1 : channels.first().index;
 
-    currentChannel_ = -1;  // force showChannel() to reload
+    // Force showChannel() to reload: the rows are new, and the open channel may
+    // be gone from the list altogether -- removed, or dropped by the device --
+    // in which case selectChannel() has nothing to open and the pane is left
+    // showing a conversation that no longer belongs to anything.
+    currentChannel_ = -1;
+    chatModel_->setMessages({});
     selectChannel(wanted);
+    updateHeader();
     updateInputState();
     updateChannelActions();
 }
@@ -400,6 +456,22 @@ void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& e
     // The user asked for it a moment ago; showing it is what they meant.
     hideNotice();
     selectChannel(channelIndex);
+    updateChannelActions();
+}
+
+void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString& error) {
+    if (!ok) {
+        showNotice(QStringLiteral("Could not remove the channel: %1").arg(error), 8000, true);
+        return;
+    }
+
+    // The sidebar was rebuilt before this arrived and has already moved off the
+    // slot. What is left is everything else keyed by that slot number, which the
+    // next channel written into it would otherwise inherit: the conversation,
+    // its unread count, and the preview line in the row.
+    hideNotice();
+    history_.remove(channelIndex);
+    channelModel_->forget(channelIndex);
     updateChannelActions();
 }
 
@@ -425,11 +497,23 @@ void MainWindow::showChannel(int channelIndex) {
     channelModel_->clearUnread(channelIndex);
     updateHeader();
     updateInputState();
+    // Removing acts on the selection, so the button follows it.
+    updateChannelActions();
 
     // Lay out first, then jump to the newest message: scrolling before the
     // delegate has sized the rows lands in the wrong place.
     messageDelegate_->setViewportWidth(chatView_->viewport()->width());
     QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
+}
+
+std::optional<model::Channel> MainWindow::currentChannelOnDevice() const {
+    // Only the device's own list carries keys, and the type is derived from the
+    // key: the cached list the sidebar shows while offline cannot answer this.
+    if (client_->state() != proto::CompanionClient::State::Ready || currentChannel_ < 0)
+        return std::nullopt;
+    for (const model::Channel& ch : client_->channels())
+        if (ch.index == currentChannel_) return ch;
+    return std::nullopt;
 }
 
 void MainWindow::updateHeader() {
@@ -578,6 +662,16 @@ void MainWindow::updateChannelActions() {
                                               .arg(proto::MaxChannels)
                                  : ready ? QStringLiteral("Add a channel")
                                          : QStringLiteral("Connect to add a channel"));
+
+    const std::optional<model::Channel> current = currentChannelOnDevice();
+    const bool removable = current && isRemovable(*current);
+    removeChannelButton_->setEnabled(removable);
+    removeChannelButton_->setToolTip(
+        !ready     ? QStringLiteral("Connect to remove a channel")
+        : !current ? QStringLiteral("Select a channel to remove")
+        : removable
+            ? QStringLiteral("Remove %1").arg(current->displayName())
+            : QStringLiteral("The Public channel cannot be removed"));
 }
 
 // ---------------------------------------------------------------------------

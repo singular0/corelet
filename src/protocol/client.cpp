@@ -326,7 +326,7 @@ void CompanionClient::setChannel(int channelIndex, const QString& name,
 
     enqueue(w.bytes(), [this, channelIndex](quint8 code, Reader& r) {
         if (code == RespOk) {
-            readBackChannel(channelIndex);
+            readBackChannel(channelIndex, /*cleared=*/false);
         } else {
             Q_EMIT channelSaveResult(
                 channelIndex, false,
@@ -336,15 +336,55 @@ void CompanionClient::setChannel(int channelIndex, const QString& name,
     });
 }
 
-void CompanionClient::readBackChannel(int index) {
+void CompanionClient::clearChannel(int channelIndex) {
+    if (state_ != State::Ready) {
+        Q_EMIT channelRemoveResult(channelIndex, false, QStringLiteral("not connected"));
+        return;
+    }
+    if (channelIndex < 0 || channelIndex >= MaxChannels) {
+        Q_EMIT channelRemoveResult(channelIndex, false, QStringLiteral("invalid channel"));
+        return;
+    }
+
+    // An all-zero key is a slot nobody is using, which is how the enumeration
+    // already tells configured slots from free ones. The name goes with it so
+    // nothing is left behind for the next channel written here to inherit.
+    Writer w(CmdSetChannel);
+    w.u8(quint8(channelIndex))
+        .padded(QByteArray(), ChannelNameField)
+        .padded(QByteArray(ChannelSecretSize, '\0'), ChannelSecretSize);
+
+    enqueue(w.bytes(), [this, channelIndex](quint8 code, Reader& r) {
+        if (code == RespOk) {
+            readBackChannel(channelIndex, /*cleared=*/true);
+        } else {
+            Q_EMIT channelRemoveResult(
+                channelIndex, false,
+                code == RespErr ? errorText(r.u8()) : QStringLiteral("unexpected reply"));
+        }
+        return true;
+    });
+}
+
+void CompanionClient::readBackChannel(int index, bool cleared) {
     // The store truncates a long name to its 32-byte field, so what the app
-    // shows comes from the slot rather than from what it asked for.
+    // shows comes from the slot rather than from what it asked for. A cleared
+    // slot is read back for the same reason in reverse: the write is only
+    // believed once the device agrees the channel is gone.
     Writer w(CmdGetChannel);
     w.u8(quint8(index));
-    enqueue(w.bytes(), [this, index](quint8 code, Reader& r) {
+    enqueue(w.bytes(), [this, index, cleared](quint8 code, Reader& r) {
+        const auto report = [this, cleared](int slot, bool ok, const QString& error) {
+            if (cleared)
+                Q_EMIT channelRemoveResult(slot, ok, error);
+            else
+                Q_EMIT channelSaveResult(slot, ok, error);
+        };
+
         if (code != RespChannelInfo) {
-            Q_EMIT channelSaveResult(
-                index, false, QStringLiteral("saved, but the slot could not be read back"));
+            report(index, false,
+                   cleared ? QStringLiteral("removed, but the slot could not be read back")
+                           : QStringLiteral("saved, but the slot could not be read back"));
             return true;
         }
 
@@ -353,8 +393,30 @@ void CompanionClient::readBackChannel(int index) {
         ch.name = r.fixedString(ChannelNameField);
         ch.secret = r.take(ChannelSecretSize);
         ch.type = model::Channel::classify(ch.name, ch.secret);
+
+        if (cleared) {
+            if (!r.ok()) {
+                report(index, false,
+                       QStringLiteral("removed, but the slot could not be read back"));
+                return true;
+            }
+            if (ch.configured()) {
+                report(index, false, QStringLiteral("the slot is still in use"));
+                return true;
+            }
+
+            channels_.erase(std::remove_if(channels_.begin(), channels_.end(),
+                                           [index](const model::Channel& c) {
+                                               return c.index == index;
+                                           }),
+                            channels_.end());
+            Q_EMIT channelsChanged(channels_);
+            report(index, true, {});
+            return true;
+        }
+
         if (!r.ok() || !ch.configured()) {
-            Q_EMIT channelSaveResult(index, false, QStringLiteral("the slot is still empty"));
+            report(index, false, QStringLiteral("the slot is still empty"));
             return true;
         }
 
@@ -372,7 +434,7 @@ void CompanionClient::readBackChannel(int index) {
                   });
 
         Q_EMIT channelsChanged(channels_);
-        Q_EMIT channelSaveResult(ch.index, true, {});
+        report(ch.index, true, {});
         return true;
     });
 }

@@ -95,6 +95,13 @@ void History::append(const Message& msg) {
     if (linesOnDisk_ > CompactThreshold) compact();
 }
 
+void History::remove(int channelIndex) {
+    if (byChannel_.remove(channelIndex) == 0) return;
+    // Dropping lines is a rewrite whatever way it is done, and compact() already
+    // writes the file from what is in memory.
+    compact();
+}
+
 void History::appendLine(const Message& msg) {
     QDir().mkpath(QFileInfo(path_).absolutePath());
 

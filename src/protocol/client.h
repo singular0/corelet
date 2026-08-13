@@ -67,6 +67,12 @@ public:
     // The far end owns the keys, so this is the only way the app can add one.
     void setChannel(int channelIndex, const QString& name, const QByteArray& secret);
 
+    // Empties a slot. There is no delete command: a slot with an all-zero key is
+    // what "unused" means on the wire, so removing a channel is a SET_CHANNEL
+    // like any other. The key is gone from the device afterwards -- a private
+    // channel is unrecoverable without a copy of it.
+    void clearChannel(int channelIndex);
+
 Q_SIGNALS:
     void stateChanged(State state, const QString& detail);
     void deviceInfoChanged(const DeviceInfo& info);
@@ -81,6 +87,9 @@ Q_SIGNALS:
     // Answer to setChannel(). Emitted after channelsChanged() when it succeeds,
     // so a listener can open the slot it just created.
     void channelSaveResult(int channelIndex, bool ok, const QString& error);
+    // Answer to clearChannel(), likewise emitted after channelsChanged() so a
+    // listener sees the slot already gone from the list.
+    void channelRemoveResult(int channelIndex, bool ok, const QString& error);
 
 private Q_SLOTS:
     void onOpened();
@@ -112,7 +121,9 @@ private:
     void beginHandshake();
     void requestChannel(int index);
     // Re-reads one slot after writing it and reports the write's outcome.
-    void readBackChannel(int index);
+    // `cleared` says which write it was: the slot is expected to be occupied
+    // afterwards, or empty, and the answer goes to the matching signal.
+    void readBackChannel(int index, bool cleared);
     void requestSync();
 
     void setState(State s, const QString& detail = {});
