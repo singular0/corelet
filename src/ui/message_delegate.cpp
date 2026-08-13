@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QFontMetrics>
 #include <QPainter>
+#include <QTextBoundaryFinder>
 
 #include "model/chat_model.h"
 #include "ui/theme.h"
@@ -21,12 +22,43 @@ constexpr int HeaderGap = 2;
 constexpr int SeparatorHeight = 22;
 constexpr int BubbleRadius = 6;
 constexpr int MinBubbleWidth = 90;
+// Same disc as a sidebar row's channel icon, so the two lists read as one app.
+constexpr int AvatarSize = 30;
+constexpr int AvatarGap = 8;
 
 // Bubbles stop well short of the full width so that the left/right alignment
 // stays readable as "who said this", and so long lines do not run the whole
 // 1280 px.
 int bubbleMaxWidth(int viewportWidth) {
     return qMax(MinBubbleWidth, qMin(int(viewportWidth * 0.74), 560));
+}
+
+// Mesh operators routinely put an emoji in their name, and it identifies them
+// far better than a letter does. Everything a font would actually draw as a
+// picture, which is wider than the Emoji property: the pictographic blocks, the
+// flag pair range, and anything a variation selector asks to be drawn as emoji.
+bool isPictographic(char32_t c) {
+    return (c >= 0x1F300 && c <= 0x1FAFF) ||  // emoticons, pictographs, transport, symbols
+           (c >= 0x1F000 && c <= 0x1F0FF) ||  // tiles and playing cards
+           (c >= 0x1F1E6 && c <= 0x1F1FF) ||  // regional indicators, i.e. flags
+           (c >= 0x2600 && c <= 0x27BF) ||    // miscellaneous symbols and dingbats
+           (c >= 0x2B00 && c <= 0x2BFF) ||    // stars and arrows
+           c == 0x3030 || c == 0x303D || c == 0x3297 || c == 0x3299;
+}
+
+char32_t firstCodePoint(const QString& cluster) {
+    if (cluster.size() > 1 && cluster.at(0).isHighSurrogate())
+        return QChar::surrogateToUcs4(cluster.at(0), cluster.at(1));
+    return cluster.at(0).unicode();
+}
+
+// The ink on the coloured disc. The sender palette is light and saturated, so
+// this is near-black in practice; measured rather than hardcoded so a darker
+// entry added later does not silently produce an unreadable avatar.
+QColor avatarInk(const QColor& background) {
+    const qreal luma = 0.299 * background.redF() + 0.587 * background.greenF() +
+                       0.114 * background.blueF();
+    return luma > 0.55 ? theme::Background : theme::Text;
 }
 
 }  // namespace
@@ -36,6 +68,39 @@ MessageDelegate::MessageDelegate(QObject* parent) : QStyledItemDelegate(parent) 
     headerFont_ = bodyFont_;
     headerFont_.setPointSizeF(qMax(6.5, bodyFont_.pointSizeF() - 1.5));
     separatorFont_ = headerFont_;
+    avatarFont_ = bodyFont_;
+    avatarFont_.setBold(true);
+}
+
+QString MessageDelegate::avatarGlyph(const QString& sender) const {
+    const auto cached = avatarGlyphs_.constFind(sender);
+    if (cached != avatarGlyphs_.constEnd()) return *cached;
+
+    // Walk grapheme clusters, not code points, so a ZWJ sequence, a flag or a
+    // skin-toned emoji stays in one piece instead of drawing as its first half.
+    QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, sender);
+    const QFontMetrics fm(avatarFont_);
+    QString initial;
+    QString glyph;
+    for (int start = 0, end = finder.toNextBoundary(); end > 0;
+         start = end, end = finder.toNextBoundary()) {
+        const QString cluster = sender.mid(start, end - start);
+        const char32_t first = firstCodePoint(cluster);
+        if (isPictographic(first) || cluster.contains(QChar(0xFE0F))) {
+            // A box of tofu says less than a letter does, and an emoji font is
+            // not a given on a bare Debian install.
+            if (fm.inFontUcs4(first)) {
+                glyph = cluster;
+                break;
+            }
+        } else if (initial.isEmpty() && cluster.at(0).isLetterOrNumber()) {
+            initial = cluster.at(0).toUpper();
+        }
+    }
+    if (glyph.isEmpty()) glyph = initial.isEmpty() ? QStringLiteral("?") : initial;
+
+    avatarGlyphs_.insert(sender, glyph);
+    return glyph;
 }
 
 void MessageDelegate::setViewportWidth(int width) {
@@ -72,7 +137,12 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     const QString text = index.data(model::ChatModel::TextRole).toString();
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
 
-    const int maxBubble = bubbleMaxWidth(width);
+    // Our own messages carry no sender name -- there is nobody to draw -- so the
+    // gutter only opens on the incoming side.
+    const bool hasAvatar = !outgoing && !sender.isEmpty();
+    const int gutter = hasAvatar ? AvatarSize + AvatarGap : 0;
+
+    const int maxBubble = bubbleMaxWidth(width - gutter);
     const int maxContent = maxBubble - 2 * PadX;
 
     const QFontMetrics bodyFm(bodyFont_);
@@ -100,8 +170,12 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
         y = SeparatorHeight;
     }
 
-    const int x = outgoing ? width - MarginX - bubbleWidth : MarginX;
+    const int x = outgoing ? width - MarginX - bubbleWidth : MarginX + gutter;
     l.bubble = QRect(x, y, bubbleWidth, bubbleHeight);
+    // Top-aligned rather than centred: it belongs with the name on the header
+    // line, and a long message would otherwise float it into the middle of the
+    // text.
+    if (hasAvatar) l.avatar = QRect(MarginX, y, AvatarSize, AvatarSize);
     l.header = QRect(x + PadX, y + PadY, bubbleWidth - 2 * PadX, headerHeight);
     l.text = QRect(x + PadX, l.header.bottom() + 1 + HeaderGap, bubbleWidth - 2 * PadX,
                    textBounds.height());
@@ -111,7 +185,9 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
 QSize MessageDelegate::sizeHint(const QStyleOptionViewItem& option,
                                 const QModelIndex& index) const {
     const Layout l = layoutFor(index, viewportWidth_);
-    return QSize(viewportWidth_, l.bubble.bottom() + 1 + RowGap);
+    // A one-line bubble is still taller than the disc, but not by much, so the
+    // row takes whichever of the two reaches lower.
+    return QSize(viewportWidth_, qMax(l.bubble.bottom(), l.avatar.bottom()) + 1 + RowGap);
 }
 
 void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -152,6 +228,18 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
     const QString meta = metaText(index, l.header.width());
+
+    if (!l.avatar.isNull()) {
+        // The same colour the name is painted in, so the disc and the header
+        // agree on who is speaking.
+        const QColor tint = theme::senderColor(sender);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(tint);
+        painter->drawEllipse(l.avatar);
+        painter->setFont(avatarFont_);
+        painter->setPen(avatarInk(tint));
+        painter->drawText(l.avatar, Qt::AlignCenter, avatarGlyph(sender));
+    }
 
     painter->setFont(headerFont_);
     if (!outgoing && !sender.isEmpty()) {

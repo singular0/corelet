@@ -1,9 +1,13 @@
 #pragma once
 
+#include <QFont>
+#include <QHash>
+#include <QString>
 #include <QStyledItemDelegate>
 
 // Draws one message as a bubble: incoming left, our own right, with a header
-// line carrying the sender and the arrival metadata.
+// line carrying the sender and the arrival metadata, and a round sender avatar
+// in the left gutter.
 //
 // A delegate rather than a QTextBrowser full of HTML because the view then
 // only lays out and paints the rows on screen. On a CM4 driving a long channel
@@ -27,14 +31,23 @@ private:
         QRect bubble;
         QRect header;
         QRect text;
+        QRect avatar;     // empty for our own messages, which carry no sender
         QRect separator;  // empty unless this row starts a new day
     };
 
     Layout layoutFor(const QModelIndex& index, int width) const;
     QString metaText(const QModelIndex& index, int availableWidth) const;
 
+    // What to draw inside the disc: the sender's own emoji if their name has
+    // one, otherwise its first letter. Memoised because a channel is a handful
+    // of senders repeated over hundreds of rows, and picking the glyph walks
+    // the name by grapheme cluster.
+    QString avatarGlyph(const QString& sender) const;
+
     int viewportWidth_ = 400;
     QFont headerFont_;
     QFont bodyFont_;
     QFont separatorFont_;
+    QFont avatarFont_;
+    mutable QHash<QString, QString> avatarGlyphs_;
 };
