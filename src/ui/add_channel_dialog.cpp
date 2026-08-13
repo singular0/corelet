@@ -1,5 +1,6 @@
 #include "ui/add_channel_dialog.h"
 
+#include <QAction>
 #include <QButtonGroup>
 #include <QClipboard>
 #include <QDialogButtonBox>
@@ -7,6 +8,7 @@
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -14,10 +16,12 @@
 #include <QRandomGenerator>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <cctype>
 #include <optional>
 
 #include "protocol/protocol.h"
+#include "ui/icons.h"
 #include "ui/theme.h"
 
 namespace {
@@ -84,13 +88,6 @@ bool isZero(const QByteArray& secret) {
     return true;
 }
 
-QLabel* hint(const QString& text) {
-    auto* label = new QLabel(text);
-    label->setWordWrap(true);
-    label->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
-    return label;
-}
-
 }  // namespace
 
 AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWidget* parent)
@@ -107,6 +104,7 @@ bool AddChannelDialog::hasFreeSlot(const QVector<model::Channel>& existing) {
 
 void AddChannelDialog::buildUi() {
     const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const qreal dpr = devicePixelRatioF();
     tabs_ = new QTabWidget;
 
     // --- new private channel ------------------------------------------------
@@ -123,23 +121,33 @@ void AddChannelDialog::buildUi() {
     createKey_->setReadOnly(true);
     createKey_->setFont(mono);
 
-    auto* regenerate = new QPushButton(QStringLiteral("New key"));
-    regenerate->setAutoDefault(false);
-    auto* copy = new QPushButton(QStringLiteral("Copy"));
-    copy->setAutoDefault(false);
+    constexpr int KeyActionIconSize = 16;
+    QIcon regenerateIcon;
+    regenerateIcon.addPixmap(
+        icons::tinted(QStringLiteral("refresh-cw"), KeyActionIconSize, theme::TextMuted, dpr),
+        QIcon::Normal);
+    regenerateIcon.addPixmap(
+        icons::tinted(QStringLiteral("refresh-cw"), KeyActionIconSize, theme::Text, dpr),
+        QIcon::Active);
+    QIcon copyIcon;
+    copyIcon.addPixmap(
+        icons::tinted(QStringLiteral("copy"), KeyActionIconSize, theme::TextMuted, dpr),
+        QIcon::Normal);
+    copyIcon.addPixmap(
+        icons::tinted(QStringLiteral("copy"), KeyActionIconSize, theme::Text, dpr),
+        QIcon::Active);
 
-    auto* keyRow = new QHBoxLayout;
-    keyRow->setSpacing(6);
-    keyRow->addWidget(createKey_, 1);
-    keyRow->addWidget(regenerate);
-    keyRow->addWidget(copy);
+    QAction* copy = createKey_->addAction(copyIcon, QLineEdit::TrailingPosition);
+    copy->setObjectName(QStringLiteral("copyKeyAction"));
+    copy->setText(QStringLiteral("Copy"));
+    copy->setToolTip(QStringLiteral("Copy"));
+    QAction* regenerate = createKey_->addAction(regenerateIcon, QLineEdit::TrailingPosition);
+    regenerate->setObjectName(QStringLiteral("newKeyAction"));
+    regenerate->setText(QStringLiteral("New key"));
+    regenerate->setToolTip(QStringLiteral("New key"));
 
     createLayout->addRow(QStringLiteral("Name"), createName_);
-    createLayout->addRow(QStringLiteral("Key"), keyRow);
-    createLayout->addRow(hint(QStringLiteral(
-        "The key is the channel: anyone holding it can read and post, and nothing else is "
-        "asked for. Hand it over in person or over something already private. The name is "
-        "yours alone — it is never transmitted.")));
+    createLayout->addRow(QStringLiteral("Key"), createKey_);
 
     // --- join with a key ----------------------------------------------------
     auto* joinTab = new QWidget;
@@ -157,9 +165,6 @@ void AddChannelDialog::buildUi() {
 
     joinLayout->addRow(QStringLiteral("Name"), joinName_);
     joinLayout->addRow(QStringLiteral("Key"), joinKey_);
-    joinLayout->addRow(hint(QStringLiteral(
-        "Paste the key you were given. Only the key has to match the people you are joining "
-        "— call the channel whatever you like.")));
 
     // --- public and hashtag -------------------------------------------------
     auto* publicTab = new QWidget;
@@ -167,7 +172,14 @@ void AddChannelDialog::buildUi() {
     publicLayout->setContentsMargins(12, 10, 12, 10);
     publicLayout->setSpacing(6);
 
-    publicWellKnown_ = new QRadioButton(QStringLiteral("MeshCore Public"));
+    const bool publicAlreadyJoined = std::any_of(
+        existing_.cbegin(), existing_.cend(), [](const model::Channel& ch) {
+            return ch.secret == model::publicChannelKey();
+        });
+    publicWellKnown_ = new QRadioButton(
+        publicAlreadyJoined ? QStringLiteral("MeshCore Public (already joined)")
+                            : QStringLiteral("MeshCore Public"));
+    publicWellKnown_->setEnabled(!publicAlreadyJoined);
     publicHashtag_ = new QRadioButton(QStringLiteral("Hashtag"));
     publicHashtag_->setChecked(true);
 
@@ -186,14 +198,11 @@ void AddChannelDialog::buildUi() {
 
     publicLayout->addWidget(publicWellKnown_);
     publicLayout->addLayout(hashtagRow);
-    publicLayout->addWidget(hint(QStringLiteral(
-        "Neither of these is private. A hashtag's key is derived from its name, so knowing "
-        "the name is joining the channel; the Public channel ships with every node.")));
     publicLayout->addStretch(1);
 
-    tabs_->addTab(createTab, QStringLiteral("New"));
-    tabs_->addTab(joinTab, QStringLiteral("Join"));
-    tabs_->addTab(publicTab, QStringLiteral("Public"));
+    tabs_->addTab(createTab, QStringLiteral("Create Private"));
+    tabs_->addTab(joinTab, QStringLiteral("Join Private"));
+    tabs_->addTab(publicTab, QStringLiteral("Join Public"));
 
     error_ = new QLabel;
     error_->setWordWrap(true);
@@ -209,8 +218,8 @@ void AddChannelDialog::buildUi() {
     layout->addWidget(error_);
     layout->addWidget(buttons);
 
-    connect(regenerate, &QPushButton::clicked, this, &AddChannelDialog::regenerateKey);
-    connect(copy, &QPushButton::clicked, this,
+    connect(regenerate, &QAction::triggered, this, &AddChannelDialog::regenerateKey);
+    connect(copy, &QAction::triggered, this,
             [this] { QGuiApplication::clipboard()->setText(createKey_->text()); });
     connect(tabs_, &QTabWidget::currentChanged, this, [this] { updateOkButton(); });
     connect(publicWellKnown_, &QRadioButton::toggled, this, [this](bool on) {
@@ -222,8 +231,8 @@ void AddChannelDialog::buildUi() {
     connect(buttons, &QDialogButtonBox::accepted, this, &AddChannelDialog::onAccepted);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    // A 32-character key on one line, and short enough for the uConsole's 480
-    // rows with the hint text wrapped.
+    // Keep a 32-character key on one line without making the dialog too wide
+    // for the uConsole.
     setMinimumWidth(460);
 }
 

@@ -8,5 +8,7 @@
         <file>minus.svg</file>
         <file>share.svg</file>
         <file>send.svg</file>
+        <file>copy.svg</file>
+        <file>refresh-cw.svg</file>
     </qresource>
 </RCC>
