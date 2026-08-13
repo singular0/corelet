@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file>globe.svg</file>
+        <file>lock.svg</file>
+        <file>hash.svg</file>
+    </qresource>
+</RCC>

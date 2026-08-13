@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MeshCore
+GenericName=Mesh Messenger
+Comment=Send and receive MeshCore mesh messages over the AIO v2 LoRa radio
+Exec=umeshcore-app
+Icon=umeshcore-app
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+Keywords=meshcore;lora;mesh;chat;radio;
+StartupNotify=true

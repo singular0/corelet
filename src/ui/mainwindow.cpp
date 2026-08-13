@@ -1,0 +1,510 @@
+#include "ui/mainwindow.h"
+
+#include <QCloseEvent>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListView>
+#include <QPushButton>
+#include <QScrollBar>
+#include <QSettings>
+#include <QSplitter>
+#include <QStandardPaths>
+#include <QStatusBar>
+#include <QTimer>
+#include <QVBoxLayout>
+
+#include "model/channelmodel.h"
+#include "model/chatmodel.h"
+#include "ui/channeldelegate.h"
+#include "ui/connectdialog.h"
+#include "ui/messagedelegate.h"
+#include "ui/theme.h"
+
+namespace {
+
+QString historyPath() {
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+           QStringLiteral("/history.jsonl");
+}
+
+// A chat reads from the bottom, so a conversation shorter than the window has
+// to sit on the input box rather than floating at the top of an empty pane.
+// QListView cannot anchor content to the bottom, so the slack is pushed into
+// the viewport's top margin.
+class ChatListView : public QListView {
+public:
+    using QListView::QListView;
+
+    // The view keeps its own anchor current, so nothing outside has to
+    // remember to call it after every append.
+    void setModel(QAbstractItemModel* model) override {
+        QListView::setModel(model);
+        if (!model) return;
+        connect(model, &QAbstractItemModel::rowsInserted, this,
+                [this] { scheduleAnchor(); });
+        connect(model, &QAbstractItemModel::modelReset, this, [this] { scheduleAnchor(); });
+    }
+
+    void updateBottomAnchor() {
+        const int rows = model() ? model()->rowCount() : 0;
+        // The unpadded height available to items: viewport() already excludes
+        // whatever margin is currently applied.
+        const int available = viewport()->height() + topMargin_;
+
+        int content = 0;
+        for (int i = 0; i < rows; i++) {
+            content += sizeHintForRow(i);
+            // Once the conversation is taller than the window no padding is
+            // needed, and stopping here keeps this bounded to a screenful of
+            // text layouts however long the history gets.
+            if (content >= available) {
+                setTopMargin(0);
+                return;
+            }
+        }
+        setTopMargin(available - content);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QListView::resizeEvent(event);
+        scheduleAnchor();
+    }
+
+private:
+    // Deferred: row heights depend on the delegate's viewport width, which the
+    // window sets from its own resizeEvent, and on rows the view has not laid
+    // out yet at the moment the model announces them.
+    void scheduleAnchor() {
+        if (anchorQueued_) return;
+        anchorQueued_ = true;
+        QTimer::singleShot(0, this, [this] {
+            anchorQueued_ = false;
+            updateBottomAnchor();
+        });
+    }
+
+    void setTopMargin(int margin) {
+        if (margin == topMargin_) return;
+        topMargin_ = margin;
+        setViewportMargins(0, margin, 0, 0);
+    }
+
+    int topMargin_ = 0;
+    bool anchorQueued_ = false;
+};
+
+}  // namespace
+
+MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
+    : QMainWindow(parent), history_(historyPath()) {
+    setWindowTitle(QStringLiteral("MeshCore"));
+    history_.load();
+
+    client_ = new proto::CompanionClient(this);
+    buildUi();
+
+    connect(client_, &proto::CompanionClient::stateChanged, this, &MainWindow::onStateChanged);
+    connect(client_, &proto::CompanionClient::deviceInfoChanged, this, &MainWindow::onDeviceInfo);
+    connect(client_, &proto::CompanionClient::channelsChanged, this,
+            &MainWindow::onChannelsChanged);
+    connect(client_, &proto::CompanionClient::messageReceived, this,
+            &MainWindow::onMessageReceived);
+    connect(client_, &proto::CompanionClient::directMessageReceived, this,
+            &MainWindow::onDirectMessageReceived);
+    connect(client_, &proto::CompanionClient::sendResult, this, &MainWindow::onSendResult);
+
+    QSettings settings;
+    restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
+    splitter_->restoreState(settings.value(QStringLiteral("splitter")).toByteArray());
+
+    // Paint the sidebar and history straight away rather than after the
+    // handshake; the device's list replaces this as soon as it arrives.
+    loadCachedChannels();
+
+    connectTo(target);
+}
+
+void MainWindow::connectTo(const proto::ConnectTarget& target) {
+    if (!target.isValid()) return;
+
+    // History and the channel cache are not keyed by device: pointing the app
+    // at a second node mixes its channels into the same history file. v1
+    // assumes one radio, which is what a companion app usually is.
+    target_ = target;
+    targetButton_->setText(target.label());
+    client_->start(proto::createTransport(target));
+}
+
+void MainWindow::openConnectDialog() {
+    ConnectDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    connectTo(dialog.target());
+}
+
+void MainWindow::buildUi() {
+    // --- channel list -------------------------------------------------------
+    auto* left = new QWidget;
+    auto* leftLayout = new QVBoxLayout(left);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(0);
+
+    auto* channelsHeader = new QLabel(QStringLiteral("CHANNELS"));
+    channelsHeader->setObjectName(QStringLiteral("header"));
+    QFont headerFont = channelsHeader->font();
+    headerFont.setPointSizeF(qMax(6.5, headerFont.pointSizeF() - 1.5));
+    headerFont.setBold(true);
+    headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+    channelsHeader->setFont(headerFont);
+    channelsHeader->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+
+    channelModel_ = new model::ChannelModel(this);
+    channelList_ = new QListView;
+    channelList_->setObjectName(QStringLiteral("channelList"));
+    channelList_->setModel(channelModel_);
+    channelList_->setItemDelegate(new ChannelDelegate(channelList_));
+    channelList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    channelList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    channelList_->setFocusPolicy(Qt::NoFocus);
+
+    leftLayout->addWidget(channelsHeader);
+    leftLayout->addWidget(channelList_, 1);
+
+    // --- chat ---------------------------------------------------------------
+    auto* right = new QWidget;
+    auto* rightLayout = new QVBoxLayout(right);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(0);
+
+    header_ = new QLabel;
+    header_->setObjectName(QStringLiteral("header"));
+
+    chatModel_ = new model::ChatModel(this);
+    auto* chatView = new ChatListView;
+    chatView_ = chatView;
+    chatView_->setModel(chatModel_);
+    messageDelegate_ = new MessageDelegate(chatView_);
+    chatView_->setItemDelegate(messageDelegate_);
+    chatView_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    chatView_->setSelectionMode(QAbstractItemView::NoSelection);
+    chatView_->setFocusPolicy(Qt::NoFocus);
+    chatView_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    chatView_->setUniformItemSizes(false);
+    chatView_->setResizeMode(QListView::Adjust);
+
+    auto* inputRow = new QWidget;
+    auto* inputLayout = new QHBoxLayout(inputRow);
+    inputLayout->setContentsMargins(8, 6, 8, 6);
+    inputLayout->setSpacing(6);
+
+    input_ = new QLineEdit;
+    input_->setPlaceholderText(QStringLiteral("Message"));
+    // A mesh payload is 184 bytes; the daemon would reject anything longer, so
+    // stop it at the keyboard instead of after a failed transmit.
+    input_->setMaxLength(proto::MaxMessageChars);
+
+    charCount_ = new QLabel;
+    QFont countFont = charCount_->font();
+    countFont.setPointSizeF(qMax(6.5, countFont.pointSizeF() - 1.5));
+    charCount_->setFont(countFont);
+    charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+    charCount_->setMinimumWidth(28);
+    charCount_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    sendButton_ = new QPushButton(QStringLiteral("Send"));
+    sendButton_->setDefault(true);
+
+    inputLayout->addWidget(input_, 1);
+    inputLayout->addWidget(charCount_);
+    inputLayout->addWidget(sendButton_);
+
+    rightLayout->addWidget(header_);
+    rightLayout->addWidget(chatView_, 1);
+    rightLayout->addWidget(inputRow);
+
+    splitter_ = new QSplitter(Qt::Horizontal);
+    splitter_->addWidget(left);
+    splitter_->addWidget(right);
+    splitter_->setStretchFactor(0, 0);
+    splitter_->setStretchFactor(1, 1);
+    splitter_->setCollapsible(0, false);
+    splitter_->setSizes({210, 800});
+    setCentralWidget(splitter_);
+
+    targetButton_ = new QPushButton;
+    targetButton_->setObjectName(QStringLiteral("statusLink"));
+    targetButton_->setToolTip(QStringLiteral("Connect to a different daemon or device"));
+    targetButton_->setCursor(Qt::PointingHandCursor);
+    targetButton_->setFocusPolicy(Qt::NoFocus);
+    // Not a default button: Return in the message box is for sending.
+    targetButton_->setAutoDefault(false);
+
+    connectionLabel_ = new QLabel;
+    connectionLabel_->setContentsMargins(0, 0, 8, 0);
+    statusBar()->addPermanentWidget(targetButton_);
+    statusBar()->addPermanentWidget(connectionLabel_);
+    statusBar()->setSizeGripEnabled(false);
+
+    connect(targetButton_, &QPushButton::clicked, this, &MainWindow::openConnectDialog);
+    connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &MainWindow::onChannelSelected);
+    connect(sendButton_, &QPushButton::clicked, this, &MainWindow::onSendClicked);
+    connect(input_, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
+    connect(input_, &QLineEdit::textChanged, this, &MainWindow::onTextChanged);
+
+    // The uConsole panel is 1280x480; this is a sane default anywhere else.
+    resize(1024, 480);
+    onTextChanged({});
+    updateInputState();
+    updateHeader();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings settings;
+    settings.setValue(QStringLiteral("geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("splitter"), splitter_->saveState());
+    settings.setValue(QStringLiteral("channel"), currentChannel_);
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    // Bubble widths are a fraction of the viewport, so the delegate has to be
+    // told when that changes or rows keep their old heights.
+    messageDelegate_->setViewportWidth(chatView_->viewport()->width());
+}
+
+// ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
+
+void MainWindow::onChannelsChanged(const QVector<model::Channel>& channels) {
+    // Remember the list so the next launch can show the sidebar and history
+    // immediately, and keep showing them while the daemon is restarting. Only
+    // names are cached: the channel keys stay in the daemon's state directory
+    // rather than being copied into a settings file. The type goes with them
+    // because it is derived from a key the cache will not have.
+    QStringList cached;
+    for (const model::Channel& ch : channels)
+        cached << QStringLiteral("%1\x1f%2\x1f%3").arg(ch.index).arg(ch.name).arg(int(ch.type));
+    QSettings().setValue(QStringLiteral("channelCache"), cached);
+
+    showChannels(channels);
+}
+
+void MainWindow::loadCachedChannels() {
+    QVector<model::Channel> channels;
+    const QStringList cached = QSettings().value(QStringLiteral("channelCache")).toStringList();
+    for (const QString& entry : cached) {
+        const QStringList parts = entry.split(QLatin1Char('\x1f'));
+        if (parts.size() < 2) continue;
+        model::Channel ch;
+        ch.index = parts[0].toInt();
+        ch.name = parts[1];
+        // Entries written before the cache carried a type are read for what the
+        // name gives away, which the device's answer corrects a moment later.
+        ch.type = parts.size() > 2 ? model::channelTypeFromInt(parts[2].toInt())
+                                   : model::Channel::classifyByName(ch.name);
+        channels.append(ch);
+    }
+    if (!channels.isEmpty()) showChannels(channels);
+}
+
+void MainWindow::showChannels(const QVector<model::Channel>& channels) {
+    channelModel_->setChannels(channels);
+
+    for (const model::Channel& ch : channels) {
+        const QVector<model::Message>& msgs = history_.messages(ch.index);
+        if (!msgs.isEmpty()) channelModel_->setLastMessage(ch.index, msgs.last());
+    }
+
+    // Prefer the channel that was open before, then the one from last session,
+    // then the first slot — a reconnect should not move the user.
+    int wanted = currentChannel_;
+    if (wanted < 0) wanted = QSettings().value(QStringLiteral("channel"), -1).toInt();
+    if (channelModel_->rowForIndex(wanted) < 0)
+        wanted = channels.isEmpty() ? -1 : channels.first().index;
+
+    currentChannel_ = -1;  // force showChannel() to reload
+    selectChannel(wanted);
+    updateInputState();
+}
+
+void MainWindow::selectChannel(int channelIndex) {
+    const int row = channelModel_->rowForIndex(channelIndex);
+    if (row < 0) {
+        showChannel(-1);
+        return;
+    }
+    channelList_->setCurrentIndex(channelModel_->index(row));
+}
+
+void MainWindow::onChannelSelected(const QModelIndex& current, const QModelIndex&) {
+    showChannel(current.isValid() ? channelModel_->channelIndexForRow(current.row()) : -1);
+}
+
+void MainWindow::showChannel(int channelIndex) {
+    if (channelIndex == currentChannel_) return;
+    currentChannel_ = channelIndex;
+
+    chatModel_->setMessages(channelIndex >= 0 ? history_.messages(channelIndex)
+                                              : QVector<model::Message>());
+    channelModel_->clearUnread(channelIndex);
+    updateHeader();
+    updateInputState();
+
+    // Lay out first, then jump to the newest message: scrolling before the
+    // delegate has sized the rows lands in the wrong place.
+    messageDelegate_->setViewportWidth(chatView_->viewport()->width());
+    QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
+}
+
+void MainWindow::updateHeader() {
+    if (currentChannel_ < 0) {
+        header_->setText(channelModel_->rowCount() == 0
+                             ? QStringLiteral("<b>No channels</b>")
+                             : QStringLiteral("<b>Select a channel</b>"));
+        return;
+    }
+
+    const int row = channelModel_->rowForIndex(currentChannel_);
+    const QString name = channelModel_->data(channelModel_->index(row),
+                                             model::ChannelModel::NameRole).toString();
+    const proto::CompanionClient::DeviceInfo& dev = client_->device();
+    QString detail;
+    if (!dev.name.isEmpty()) {
+        detail = QStringLiteral("  <span style='color:%1'>you are %2 · %3 MHz SF%4</span>")
+                     .arg(theme::TextMuted.name(), dev.name.toHtmlEscaped())
+                     .arg(dev.freqMhz, 0, 'f', 3)
+                     .arg(dev.sf);
+    }
+    header_->setText(QStringLiteral("<b>%1</b>%2").arg(name.toHtmlEscaped(), detail));
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+void MainWindow::onMessageReceived(const model::Message& msg) {
+    history_.append(msg);
+    channelModel_->setLastMessage(msg.channelIndex, msg);
+
+    if (msg.channelIndex == currentChannel_)
+        appendToView(msg);
+    else
+        channelModel_->bumpUnread(msg.channelIndex);
+}
+
+void MainWindow::onDirectMessageReceived(const model::Message& msg) {
+    // v1 has no DM view, but SYNC_NEXT_MESSAGE already popped this from the
+    // daemon's inbox: not writing it down would destroy it. It goes to the same
+    // history file under channel -1, ready for whenever DMs are built out.
+    history_.append(msg);
+    directMessageCount_++;
+    statusBar()->showMessage(
+        QStringLiteral("%1 direct message(s) received and saved — no DM view yet")
+            .arg(directMessageCount_),
+        8000);
+}
+
+void MainWindow::appendToView(const model::Message& msg) {
+    QScrollBar* bar = chatView_->verticalScrollBar();
+    // Only follow the conversation if the user is already at the bottom;
+    // yanking the view while they are reading back is worse than a missed jump.
+    const bool atBottom = bar->value() >= bar->maximum() - 8;
+
+    chatModel_->append(msg);
+    if (atBottom) QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
+}
+
+void MainWindow::onSendClicked() {
+    const QString text = input_->text().trimmed();
+    if (text.isEmpty() || currentChannel_ < 0) return;
+    if (client_->state() != proto::CompanionClient::State::Ready) return;
+
+    input_->clear();
+    client_->sendChannelMessage(currentChannel_, text);
+}
+
+void MainWindow::onSendResult(int channelIndex, const QString& text, bool ok,
+                              const QString& error) {
+    if (!ok) {
+        statusBar()->showMessage(QStringLiteral("Could not send: %1").arg(error), 6000);
+        // Hand the text back rather than losing it to a failed send.
+        if (input_->text().isEmpty()) input_->setText(text);
+        return;
+    }
+
+    // Our own transmission never comes back to us over the air, so the sent
+    // message is echoed locally or it would never appear in the history.
+    model::Message msg;
+    msg.channelIndex = channelIndex;
+    msg.sender = client_->device().name;
+    msg.text = text;
+    msg.timestamp = QDateTime::currentDateTime();
+    msg.outgoing = true;
+
+    history_.append(msg);
+    channelModel_->setLastMessage(channelIndex, msg);
+    if (channelIndex == currentChannel_) appendToView(msg);
+}
+
+void MainWindow::onTextChanged(const QString& text) {
+    const int left = proto::MaxMessageChars - int(text.size());
+    charCount_->setText(left <= 30 ? QString::number(left) : QString());
+    charCount_->setStyleSheet(
+        QStringLiteral("color: %1;")
+            .arg((left <= 10 ? theme::Warning : theme::TextMuted).name()));
+    updateInputState();
+}
+
+void MainWindow::updateInputState() {
+    const bool ready = client_->state() == proto::CompanionClient::State::Ready;
+    const bool canType = ready && currentChannel_ >= 0;
+    input_->setEnabled(canType);
+    sendButton_->setEnabled(canType && !input_->text().trimmed().isEmpty());
+    input_->setPlaceholderText(canType ? QStringLiteral("Message")
+                               : ready ? QStringLiteral("Select a channel")
+                                       : QStringLiteral("Waiting for a connection…"));
+}
+
+// ---------------------------------------------------------------------------
+// Connection
+// ---------------------------------------------------------------------------
+
+void MainWindow::onStateChanged(proto::CompanionClient::State state, const QString& detail) {
+    using State = proto::CompanionClient::State;
+
+    QString label;
+    QColor color = theme::TextMuted;
+    switch (state) {
+        case State::Disconnected:
+            label = detail.isEmpty() ? QStringLiteral("disconnected") : detail;
+            color = theme::Error;
+            break;
+        case State::Connecting:
+            // Whatever the transport is up to — a BLE scan reports its own
+            // progress, and it is worth showing rather than a spinner-in-words.
+            label = detail.isEmpty() ? QStringLiteral("connecting") : detail;
+            color = theme::Warning;
+            break;
+        case State::Handshaking:
+            label = QStringLiteral("syncing");
+            color = theme::Warning;
+            break;
+        case State::Ready:
+            label = QStringLiteral("connected");
+            color = theme::Accent;
+            break;
+    }
+    connectionLabel_->setText(QStringLiteral("● %1").arg(label));
+    connectionLabel_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+    updateInputState();
+}
+
+void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
+    setWindowTitle(info.name.isEmpty() ? QStringLiteral("MeshCore")
+                                       : QStringLiteral("MeshCore — %1").arg(info.name));
+    updateHeader();
+}

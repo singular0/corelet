@@ -1,0 +1,97 @@
+#pragma once
+
+#include <QByteArray>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QString>
+
+namespace model {
+
+// Nothing on the wire says what kind of channel a slot holds — GET_CHANNEL
+// answers with a name and a key and no more — so the kind is deduced from the
+// key itself, which is exactly how the daemon builds them.
+enum class ChannelType {
+    Public,   // the well-known key every node ships with in slot 0
+    Hashtag,  // key derived from the name: knowing `#jokes` is joining it
+    Private,  // a key that arrived some other way
+};
+
+// One configured channel slot. `index` is the daemon's slot number, which is
+// how the companion protocol addresses channels, so it is the identity here
+// too rather than a position in some list the app happens to build.
+struct Channel {
+    int index = 0;
+    QString name;
+    QByteArray secret;  // 16 bytes; all-zero means the slot is unused
+    // Classified once, when the key is in hand: the offline channel cache holds
+    // names only, so a Channel rebuilt from it could not work this out itself.
+    ChannelType type = ChannelType::Private;
+
+    bool configured() const {
+        if (secret.size() != proto_secret_size) return false;
+        for (char c : secret)
+            if (c != 0) return true;
+        return false;
+    }
+
+    // Empty names are legal on the wire; show something selectable instead.
+    QString displayName() const {
+        return name.isEmpty() ? QStringLiteral("Channel %1").arg(index) : name;
+    }
+
+    static ChannelType classify(const QString& name, const QByteArray& secret) {
+        // Mirrors umeshcore's mesh::Channel: the public key is a constant every
+        // node ships with, and a hashtag key is SHA-256 over the name with the
+        // '#' included, truncated to the secret length.
+        static const QByteArray publicKey =
+            QByteArray::fromHex("8b3387e9c5cdea6ac9e5edbaa115cd72");
+        if (secret == publicKey) return ChannelType::Public;
+        const QByteArray fromName =
+            QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256)
+                .left(proto_secret_size);
+        if (secret == fromName) return ChannelType::Hashtag;
+        return ChannelType::Private;
+    }
+
+    // Best guess for a cache entry written before types were recorded, which is
+    // wrong at worst until the device answers with the real keys.
+    static ChannelType classifyByName(const QString& name) {
+        if (name.startsWith(QLatin1Char('#'))) return ChannelType::Hashtag;
+        if (name.compare(QStringLiteral("Public"), Qt::CaseInsensitive) == 0)
+            return ChannelType::Public;
+        return ChannelType::Private;
+    }
+
+private:
+    static constexpr int proto_secret_size = 16;
+};
+
+// Settings hand back plain ints, and an unrecognised one must not index off the
+// end of anything: treat it as an ordinary keyed channel.
+inline ChannelType channelTypeFromInt(int value) {
+    switch (value) {
+        case int(ChannelType::Public): return ChannelType::Public;
+        case int(ChannelType::Hashtag): return ChannelType::Hashtag;
+        default: return ChannelType::Private;
+    }
+}
+
+struct Message {
+    int channelIndex = 0;
+    // Channel messages carry no per-sender key, only a name the sender put in
+    // the text, so this is unauthenticated and must never be treated as identity.
+    QString sender;
+    QString text;
+    QDateTime timestamp;
+    bool outgoing = false;
+    // Radio quality of the packet that carried it. Meaningless for our own
+    // messages, so `hasSignal` gates display rather than a sentinel value.
+    bool hasSignal = false;
+    float snr = 0.0f;
+    // 0xFF on the wire means "arrived by flood"; otherwise it is a hop count.
+    int pathLen = 0xFF;
+
+    bool flooded() const { return pathLen == 0xFF; }
+};
+
+}  // namespace model
