@@ -48,17 +48,17 @@ add_executable(corelet
 )
 
 # What the app reports for --version and in its title bar is the tag it was
-# built against, not the number below: only the tag says which of the many
-# builds carrying a given version number this one is. The version above stays
-# the release number -- it is what the packages, the bundle and the man page
-# are versioned by, and what a checkout with no tags in it falls back to.
+# built against, not the number above: only the tag says which of the many
+# builds carrying a given version number this one is. The project version stays
+# the release number -- it is what the packages, the bundle and the man page are
+# versioned by -- and a build with no tag to name reports 0.0.0 rather than
+# borrowing it.
 set(CORELET_VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 add_custom_target(corelet-version
     BYPRODUCTS ${CORELET_VERSION_HEADER}
     COMMAND ${CMAKE_COMMAND}
         -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -DOUTPUT=${CORELET_VERSION_HEADER}
-        -DFALLBACK=${PROJECT_VERSION}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
     COMMENT "Resolving the version from git"
     VERBATIM)

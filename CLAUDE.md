@@ -59,9 +59,10 @@ its title bar is the tag it was built against: `cmake/version.cmake` runs `git d
 rather than at configure time, because tagging a commit changes nothing CMake would otherwise
 notice; the header is rewritten only when the string changes, so an unchanged build compiles
 nothing. A checkout with no tag to find — a source tarball, a shallow clone, the container `.deb`
-build that drops `.git` — falls back to `project(... VERSION ...)`. That fallback is why both
-packaging workflows check out with `fetch-depth: 0`: on a default shallow clone every release
-binary would quietly report the number in the tree rather than the tag being released.
+build that drops `.git` — reports `0.0.0`, which is no release and reads as the unknown build it
+is; it deliberately does not borrow `project(... VERSION ...)`, since a binary that cannot name the
+tag it came from should not claim one. That is why both packaging workflows check out with
+`fetch-depth: 0`: on a default shallow clone every release binary would report `0.0.0`.
 
 `scripts/build-dmg.sh` builds the macOS disk image into `build/dmg/` — never into `build/`, which
 has to keep linking against Homebrew Qt for development — runs `macdeployqt`, ad-hoc signs and

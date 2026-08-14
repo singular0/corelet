@@ -6,9 +6,14 @@
 # than no version at all. The header is only rewritten when the string actually
 # changes, so the usual build re-runs git and compiles nothing.
 #
-# Expects SOURCE_DIR, OUTPUT and FALLBACK on the command line.
+# Expects SOURCE_DIR and OUTPUT on the command line.
 
-set(version "${FALLBACK}")
+# What a build with no tag to describe reports. Deliberately not
+# project(... VERSION ...): that number names the release the packages carry,
+# and a binary that cannot find the tag it came from has no business claiming
+# it. 0.0.0 is no release at all, sorts below every real one, and is a version
+# nobody has to look up to recognise as meaning "unknown build".
+set(version "0.0.0")
 
 # --match keeps this to the tags release.yml recognises, so a `nightly` or a
 # moving `latest` pointing at some other commit cannot name the build. --dirty
@@ -25,8 +30,8 @@ if(GIT_EXECUTABLE)
         RESULT_VARIABLE status)
     # A failure here is a checkout with no tag in it -- a source tarball, a
     # shallow clone, the container build in scripts/build-deb.sh that drops
-    # .git -- and not something to fail a build over. FALLBACK is
-    # project(... VERSION ...), which the packages are versioned by anyway.
+    # .git -- and not something to fail a build over. It leaves the version
+    # above, which says exactly that.
     if(status EQUAL 0)
         string(REGEX REPLACE "^v" "" version "${described}")
     endif()
