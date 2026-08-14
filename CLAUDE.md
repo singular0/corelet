@@ -114,15 +114,17 @@ The release publishes all four packages plus a `SHA256SUMS` file, which is the o
 download has since nothing is notarized
 or signed against a key a stranger can check. Both `-dbgsym` packages stay out of the release —
 they are for debugging a build you already have and would double the asset list — but CI still
-uploads them as build artifacts on every push.
+uploads them as build artifacts on every run.
 
-`debian.yml` and `macos.yml` build on push and PR and are also `workflow_call`-able;
+`debian.yml` and `macos.yml` build on PR, on `workflow_dispatch` and on `workflow_call`;
 `.github/workflows/release.yml` is the only thing triggered by a tag and calls both, so a release
 is built by the same jobs CI already runs and a tag never builds twice. Neither packaging workflow
-should get a tag trigger back. Releases are `v` + semver only: the `tags:` glob is the closest
-GitHub's filter syntax gets, and the `gate` job re-checks with semver's regex and *skips* the run
-on a non-match — an unrecognised tag is not a failure. It also checks that the shared resolver sees
-the pushed tag exactly before starting the package jobs.
+should get a tag trigger back. Neither should get a push trigger back either: commits land straight
+on `main`, so a push build would only report after the fact — dispatch the workflow by hand when
+you want the packaging exercised before tagging. Releases are `v` + semver only: the `tags:` glob
+is the closest GitHub's filter syntax gets, and the `gate` job re-checks with semver's regex and
+*skips* the run on a non-match — an unrecognised tag is not a failure. It also checks that the
+shared resolver sees the pushed tag exactly before starting the package jobs.
 
 ## Do not visually verify UI work
 

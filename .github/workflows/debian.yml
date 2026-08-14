@@ -3,9 +3,11 @@ name: debian
 # workflow_call is what release.yml builds with, so a tag runs these jobs once,
 # as part of the release, rather than once here and once there against the same
 # commit. Nothing tag-shaped is triggered from this file for that reason.
+#
+# There is no push trigger either: packaging is slow and most commits land
+# straight on main, so the run would be after the fact anyway. Open a PR, or
+# dispatch this manually, when you want the packaging exercised before a tag.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:

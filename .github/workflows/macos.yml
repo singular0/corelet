@@ -1,10 +1,9 @@
 name: macos
 
 # As in debian.yml: tags are release.yml's, which calls this workflow, so a tag
-# does not also build here on its own.
+# does not also build here on its own, and there is no push trigger -- a PR or
+# a manual dispatch is what exercises the packaging ahead of a tag.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
