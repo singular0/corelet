@@ -20,7 +20,7 @@
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
 #include <QCoreApplication>
 #include <QPermissions>
-#define UMESHCORE_HAVE_PERMISSIONS 1
+#define CORELET_HAVE_PERMISSIONS 1
 #endif
 
 namespace {
@@ -126,7 +126,7 @@ void ConnectDialog::buildUi() {
 // ---------------------------------------------------------------------------
 
 void ConnectDialog::scanWhenPermitted() {
-#ifdef UMESHCORE_HAVE_PERMISSIONS
+#ifdef CORELET_HAVE_PERMISSIONS
     // macOS and Android gate Bluetooth behind a user grant, and a scan started
     // without one finds nothing at all rather than failing.
     QBluetoothPermission permission;
