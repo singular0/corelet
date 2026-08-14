@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+# The companion protocol is unauthenticated and this process parses frames off
+# a socket, so take everything the toolchain offers rather than the defaults.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Nothing here is architecture-specific: the same rules build the uConsole's
+# arm64 package and an amd64 one. dh's cmake buildsystem configures with
+# CMAKE_BUILD_TYPE=None so the flags come from dpkg-buildflags, which is what
+# the hardening options above feed.
+%:
+	dh $@ --buildsystem=cmake

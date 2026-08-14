@@ -1,0 +1,64 @@
+.\" Installed by cmake --install and by the Debian package. The version comes
+.\" from the project so the two cannot drift; the date is edited by hand,
+.\" since stamping the build date would make the package unreproducible.
+.TH CORELET 1 "August 2026" "corelet @PROJECT_VERSION@" "User Commands"
+.SH NAME
+corelet \- MeshCore companion app for the ClockworkPi uConsole
+.SH SYNOPSIS
+.B corelet
+.RB [ \-H
+.IR host ]
+.RB [ \-p
+.IR port ]
+.RB [ \-b
+.IR device ]
+.SH DESCRIPTION
+.B corelet
+is a chat window for a MeshCore node. It reaches the node either through a
+.BR umeshcored (8)
+companion daemon over TCP, or directly over Bluetooth LE, lists the node's
+configured channels and sends and receives messages on them.
+.PP
+It is a client only: all radio work, crypto and channel state live in the
+daemon or in the device firmware.
+.PP
+Started with no target, the app asks for one and remembers the answer. Naming
+a target on the command line skips that dialog.
+.SH OPTIONS
+.TP
+.BR \-H ", " \-\-host " " \fIhost\fR
+Host running the MeshCore daemon. Defaults to 127.0.0.1.
+.TP
+.BR \-p ", " \-\-port " " \fIport\fR
+Companion port on that host, matching the daemon's
+.I companion_port
+setting. Defaults to 5000.
+.TP
+.BR \-b ", " \-\-ble " " \fIdevice\fR
+Reach a MeshCore device over Bluetooth LE instead, named either by its
+advertised name or by the address the local adapter knows it as.
+.TP
+.BR \-h ", " \-\-help
+Show a usage summary and exit.
+.TP
+.BR \-v ", " \-\-version
+Show the version and exit.
+.SH FILES
+.TP
+.I ~/.local/share/singular0/corelet/history/<public\-key>.sqlite3
+Message history, one database per node. Collecting a message removes it from
+the daemon's inbox, so this file is the only copy.
+.TP
+.I ~/.config/singular0/corelet.conf
+Window geometry, the connection target and the offline channel cache.
+.SH SECURITY
+The companion protocol has
+.B no authentication.
+The daemon binds loopback by default; only point
+.B corelet
+at another host across a network you control.
+.PP
+Channel messages carry the sender's name in their text and nothing signs it,
+so a name shown next to a message is a claim, not an identity.
+.SH SEE ALSO
+.BR umeshcored (8)

@@ -51,6 +51,49 @@ The Mac build is a bundle — macOS refuses Bluetooth to a process with no usage
 only a bundle has anywhere to declare one — so it runs from
 `./build/Corelet.app/Contents/MacOS/Corelet`. The uConsole build is a plain binary named `corelet`.
 
+## Debian packages
+
+`debian/` builds a `corelet` package for the uConsole (arm64) and for an x86 desktop (amd64).
+Nothing in it is architecture-specific; the difference is only where it runs.
+
+On the uConsole, or any Debian machine you want a package for, build natively:
+
+```sh
+./scripts/build-deb.sh deps    # Build-Depends, read out of debian/control
+./scripts/build-deb.sh
+```
+
+Off the target — from a Mac, or to build the uConsole's package on a desktop — name the
+architecture and the script sets up a `debian:trixie` container and runs that same native build
+inside it:
+
+```sh
+./scripts/build-deb.sh amd64
+./scripts/build-deb.sh arm64      # the uConsole
+./scripts/build-deb.sh all
+```
+
+A foreign architecture runs under the qemu binfmt handler Docker ships, so an arm64 build on an
+x86 host takes about half an hour rather than four minutes — fine for a one-off, which is why CI
+does it differently (below). Packages land in `dist/`, next to the `-dbgsym` package holding their
+debug symbols; install one with `sudo apt install ./dist/corelet_0.1.0_arm64.deb`, which pulls the
+Qt runtime with it.
+
+There is no cross-compilation path on purpose. It would be faster than qemu, but debhelper skips
+`dh_auto_test` whenever the host architecture differs from the build one, so a cross-built package
+ships untested, and it would be a second build path to keep working for one small app.
+
+`.github/workflows/deb.yml` builds both packages on each push, each on a runner of its own
+architecture — `ubuntu-latest` and `ubuntu-24.04-arm`, both inside a `debian:trixie` container — so
+neither emulation nor a cross toolchain is involved and both packages run their tests. GitHub's
+arm64 runners are free for public repositories; on a private one without them, drop the container
+job back to `./scripts/build-deb.sh arm64` under `docker/setup-qemu-action` and accept the wait.
+Each job uploads its `.deb` as a build artifact.
+
+The package version is `debian/changelog`'s, and the format is native, so a release is a changelog
+entry with the same version as `project(... VERSION ...)` in `CMakeLists.txt`. The script warns if
+the two have drifted.
+
 ## Running
 
 Started with no arguments, the app asks what to connect to: a host and port, or a device picked
@@ -72,8 +115,8 @@ Over BLE the device must be in range and not already connected to another app �
 serves one companion at a time. macOS asks for Bluetooth permission the first time; on Linux the
 user needs to be able to talk to BlueZ, which the default `bluetooth` group grants.
 
-`etc/corelet.desktop` is installed by `cmake --install`, so the app shows up in the
-uConsole's launcher.
+`etc/corelet.desktop` is installed by `cmake --install` and by the Debian package, so the app shows
+up in the uConsole's launcher. `corelet(1)` documents the options.
 
 ## How it talks to the daemon
 

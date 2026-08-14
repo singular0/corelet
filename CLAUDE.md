@@ -25,6 +25,20 @@ binary is `./build/Corelet.app/Contents/MacOS/Corelet`. The uConsole build is a 
 Sources are listed explicitly in `CMakeLists.txt` — a new `.cpp` must be added there or it silently
 won't compile. `compile_commands.json` is a symlink into `build/`.
 
+`debian/` packages the same tree for arm64 (uConsole) and amd64. `scripts/build-deb.sh` with no
+argument runs `dpkg-buildpackage` natively; `deps` installs Build-Depends first; `arm64|amd64|all`
+sets up a `debian:trixie` container and runs that same native path inside it, which is what works
+from macOS. Output goes to `dist/`.
+
+CI (`.github/workflows/deb.yml`) builds each architecture on its own runner rather than
+cross-compiling or emulating: debhelper skips `dh_auto_test` when the host architecture differs
+from the build one, so a cross-built package would ship untested. Don't add a cross path.
+
+The package is source format `3.0 (native)`, so its version is `debian/changelog`'s and must be
+kept level with `project(... VERSION ...)` — the script warns when they drift. Build-Depends in
+`debian/control` are the single source of dependency truth: `apt-get build-dep` reads them, so no
+list of Qt packages is repeated in the script, the workflow or the README.
+
 ## Do not visually verify UI work
 
 After implementing a UI feature, stop at "it compiles". Do not launch the app, render a widget to

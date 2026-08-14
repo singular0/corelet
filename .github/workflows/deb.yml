@@ -1,0 +1,51 @@
+name: deb
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Both architectures run the same native build on their own runner. GitHub's
+  # arm64 runners are free for public repositories, which is what makes that
+  # possible: cross-compiling would be quicker but debhelper skips the test
+  # suite whenever the host architecture differs from the build one, and qemu
+  # would turn a four-minute job into half an hour.
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # The package targets Debian trixie, which is what the uConsole runs; the
+    # runner's own distribution only supplies the kernel and the CPU.
+    container: debian:trixie
+    steps:
+      # A stock Debian image has no git, and checkout silently falls back to
+      # downloading a tarball over the REST API when it cannot find one.
+      - name: Install git
+        run: apt-get update -qq && apt-get install -y --no-install-recommends git
+
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: ./scripts/build-deb.sh deps
+
+      - name: Build package
+        run: ./scripts/build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corelet-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error

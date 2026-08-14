@@ -96,12 +96,19 @@ if(APPLE)
 endif()
 
 include(GNUInstallDirs)
+
+# The man page carries the project version, so it is generated rather than
+# shipped verbatim; @ONLY keeps roff's own ${...}-free syntax out of the way.
+configure_file(etc/corelet.1.in ${CMAKE_CURRENT_BINARY_DIR}/corelet.1 @ONLY)
+
 install(TARGETS corelet
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE DESTINATION .)
 install(FILES etc/corelet.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
 install(FILES assets/corelet.png
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/corelet.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
 message(STATUS "corelet ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
 
