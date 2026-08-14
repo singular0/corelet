@@ -1,33 +1,138 @@
 # Corelet
 
-A MeshCore companion app for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole),
-talking to [`umeshcored`](../umeshcore) over the companion protocol on loopback, or straight to a
-MeshCore device over Bluetooth LE.
+A lightweight, cross-platform desktop companion app for [MeshCore](https://meshcore.co.uk) — a
+chat window for your mesh node.
 
-Qt 6 Widgets, C++20, no dependencies beyond Qt itself. It is a client only: all radio work,
-crypto and state live in the daemon or the device's firmware, so this process is a link and a
-window.
+It reaches your node one of two ways: over Bluetooth LE straight to the device, or over TCP to a
+companion daemon. Either way it lists the node's channels, shows their history and sends and
+receives messages on them.
 
-## Status
+Corelet is a client and nothing more. All radio work, encryption and channel state live in the
+device firmware or the daemon.
 
-| Area | State |
-|------|-------|
-| Channel list, per-channel history, send/receive | Working |
-| TCP to a `umeshcored` | Working |
-| Bluetooth LE to a device | Working |
-| Message history across restarts | Working (the app owns it — see below) |
-| Auto-reconnect, offline read-only mode | Working |
-| Direct messages | Captured and stored, but not shown or sendable |
-| Contacts, adverts, telemetry, settings | Not implemented |
-| Adding or editing channels | Not implemented — edit the daemon's `channels` file |
+Built with C++ and Qt 6 and packaged for Debian and macOS.
 
-Persisted state is isolated first by the node's public key and then by a fingerprint of each
-channel key. Changing devices cannot expose another device's channels or messages, and moving a
-channel to a different slot keeps its history with the channel.
+## Features
 
-## Building
+Unchecked boxes are not implemented yet — use another client or the daemon for those.
 
-On the uConsole (Raspberry Pi OS / Debian trixie):
+**Messaging**
+
+- [x] Channel sidebar with the newest message, unread counts, and an icon for each channel kind.
+- [x] Send and receive channel messages.
+- [x] Day markers and an unread marker, so a busy channel opens on what is new.
+- [x] History kept on disk per node and surviving restarts. Collecting a message removes it from
+      the node's inbox, so **Corelet's database is the only copy of your messages.**
+- [ ] Direct messages. They are received and saved, but there is no view for them and no way to
+      send one.
+
+**Channels**
+
+- [x] Create a private channel and share its key.
+- [x] Join a private channel from a key someone sent you.
+- [x] Join the public channel, or any hashtag channel.
+- [x] Remove a channel from the node.
+
+**Your node**
+
+- [x] A node pane with its name, what you are connected to, and battery level.
+- [x] A node info panel with the public key, position and radio settings.
+- [ ] Contacts and adverts.
+- [ ] Telemetry.
+- [ ] Changing device settings.
+
+**Connection**
+
+- [x] Bluetooth LE to a device, or TCP to a daemon, remembered after the first launch.
+- [x] Reconnects on its own when the link drops.
+- [x] Stays readable from a local cache while the node is unreachable.
+
+## Background
+
+I got a [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole), wanted a MeshCore client for
+it, and didn't much like the ones that already existed — mostly a question of weight and of how
+they use a screen this shape.
+
+So this is the one I wanted. It is also an experiment: Corelet was written end to end with agentic
+LLM tooling, and **not one line of its code was typed by hand.** Every design decision, review and
+correction was mine; none of the typing was.
+
+## Install
+
+Pre-built packages for each release are on the
+[Releases page](https://github.com/singular0/corelet/releases).
+
+### Debian, Raspberry Pi OS and the uConsole
+
+Take `arm64` for the uConsole or a Raspberry Pi, `amd64` for an x86 desktop. The packages are built
+for Debian 13 (trixie) and want that or newer, since they use the system's Qt 6.
+
+```sh
+sudo apt install ./corelet_0.1.0_arm64.deb
+```
+
+Install the *file path*, not the bare name — that leading `./` is what lets apt pull the Qt runtime
+in as a dependency.
+
+Corelet then appears in the application launcher. Bluetooth needs your user to be able to talk to
+BlueZ, which membership of the default `bluetooth` group grants.
+
+### macOS
+
+Take `arm64` for Apple Silicon or `x86_64` for an Intel Mac, open the disk image and drag Corelet
+to Applications. **macOS 15 (Sequoia) or newer** is required.
+
+#### The app is ad-hoc signed, so the first launch takes an extra step
+
+Corelet is signed, but with an ad-hoc signature rather than a paid Apple Developer ID, and it is
+not notarized. Gatekeeper will refuse to open it the first time. Two ways past it:
+
+- Try to open the app, then go to **System Settings → Privacy & Security**, find the message about
+  Corelet being blocked, and click **Open Anyway**.
+- Or clear the download quarantine flag yourself:
+
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/Corelet.app
+  ```
+
+One knock-on effect worth knowing: macOS ties the Bluetooth permission to an app's code identity,
+and an ad-hoc signature is a new identity on every build. After updating, the Bluetooth prompt may
+come back, or the permission may appear stuck as denied. Deleting Corelet's entry under
+**Privacy & Security → Bluetooth** clears that and lets it ask again.
+
+## Running
+
+Started with no arguments, Corelet asks what to connect to — a host and port, or a device picked
+from a Bluetooth scan — and remembers the answer. The connection button in the node pane
+disconnects or points it somewhere else.
+
+Naming a target on the command line skips that dialog:
+
+```sh
+corelet --ble MeshCore-3f2a          # advertised name, or an address
+corelet --host 10.0.0.4 --port 5099
+```
+
+| Option | Meaning |
+|--------|---------|
+| `-b`, `--ble <device>` | Reach a MeshCore device over Bluetooth LE, by advertised name or by the address this machine knows it as. |
+| `-H`, `--host <host>` | Host running the MeshCore daemon. Default `127.0.0.1`. |
+| `-p`, `--port <port>` | Companion port on that host, matching the daemon's `companion_port`. Default `5000`. |
+| `-h`, `--help` | Usage summary. |
+| `-v`, `--version` | Version. |
+
+`man corelet` has the same reference on Linux.
+
+Two things to expect. Over BLE, the device has to be in range and not already connected to
+something else — MeshCore firmware serves one companion app at a time. Over TCP, note that the
+companion protocol has **no authentication whatsoever**: the daemon listens on loopback for that
+reason, and you should only point Corelet across a network you control.
+
+## Build from source
+
+Qt 6 and a C++20 compiler, no other dependencies.
+
+**Debian / Raspberry Pi OS:**
 
 ```sh
 sudo apt install build-essential cmake qt6-base-dev qt6-connectivity-dev qt6-svg-dev \
@@ -36,259 +141,28 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j4
 ```
 
-`qt6-connectivity-dev` is what brings in QtBluetooth; BLE also needs `bluez` running, which it is
-by default. `qt6-svg-dev` is for the sidebar's channel-type icons, and `libqt6sql6-sqlite` supplies
-the SQLite driver used for message history.
+The binary is `./build/corelet`; `sudo cmake --install build` adds the launcher entry and man page.
 
-On macOS with Homebrew Qt, point CMake at it:
+**macOS**, with Qt from Homebrew (`brew install cmake qt`):
 
 ```sh
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 cmake --build build
 ```
 
-The Mac build is a bundle — macOS refuses Bluetooth to a process with no usage description, and
-only a bundle has anywhere to declare one — so it runs from
-`./build/Corelet.app/Contents/MacOS/Corelet`. The uConsole build is a plain binary named `corelet`.
+This one is an app bundle — macOS refuses Bluetooth access to anything that can't declare why it
+wants it — so it runs from `./build/Corelet.app/Contents/MacOS/Corelet`. It links against your
+Homebrew Qt and so only runs on the machine that built it; `scripts/build-dmg.sh` makes a
+self-contained disk image instead.
 
-## Debian packages
-
-`debian/` builds a `corelet` package for the uConsole (arm64) and for an x86 desktop (amd64).
-Nothing in it is architecture-specific; the difference is only where it runs.
-
-On the uConsole, or any Debian machine you want a package for, build natively:
-
-```sh
-./scripts/build-deb.sh deps    # Build-Depends, read out of debian/control
-./scripts/build-deb.sh
-```
-
-Off the target — from a Mac, or to build the uConsole's package on a desktop — name the
-architecture and the script sets up a `debian:trixie` container and runs that same native build
-inside it:
-
-```sh
-./scripts/build-deb.sh amd64
-./scripts/build-deb.sh arm64      # the uConsole
-./scripts/build-deb.sh all
-```
-
-A foreign architecture runs under the qemu binfmt handler Docker ships, so an arm64 build on an
-x86 host takes about half an hour rather than four minutes — fine for a one-off, which is why CI
-does it differently (below). Packages land in `dist/`, next to the `-dbgsym` package holding their
-debug symbols; install one with `sudo apt install ./dist/corelet_0.1.0_arm64.deb`, which pulls the
-Qt runtime with it.
-
-There is no cross-compilation path on purpose. It would be faster than qemu, but debhelper skips
-`dh_auto_test` whenever the host architecture differs from the build one, so a cross-built package
-ships untested, and it would be a second build path to keep working for one small app.
-
-`.github/workflows/debian.yml` builds both packages on each push, each on a runner of its own
-architecture — `ubuntu-latest` and `ubuntu-24.04-arm`, both inside a `debian:trixie` container — so
-neither emulation nor a cross toolchain is involved and both packages run their tests. GitHub's
-arm64 runners are free for public repositories; on a private one without them, drop the container
-job back to `./scripts/build-deb.sh arm64` under `docker/setup-qemu-action` and accept the wait.
-Each job uploads its `.deb` as a build artifact.
-
-The package version is `debian/changelog`'s, and the format is native, so a release is a changelog
-entry with the same version as `project(... VERSION ...)` in `CMakeLists.txt`. The script warns if
-the two have drifted.
-
-## macOS disk image
-
-The bundle CMake builds links straight into the Homebrew Qt prefix, so it only runs on the machine
-that built it. `scripts/build-dmg.sh` produces one that doesn't:
-
-```sh
-./scripts/build-dmg.sh deps    # brew install cmake qt
-./scripts/build-dmg.sh
-```
-
-It builds RelWithDebInfo into a tree of its own — the development `build/` keeps pointing at
-Homebrew Qt, which is what you want while working on it — runs the tests, copies the bundle to a
-staging folder, and lets `macdeployqt` pull the frameworks and plugins inside and rewrite the load
-commands.
-
-Then it takes most of that back out. macdeployqt copies plugin directories wholesale, and Qt's only
-input-context plugin is a virtual keyboard that links the entire QML runtime; nothing here types
-into an on-screen keyboard, and this app is Widgets specifically so it never loads QtQuick. Dropping
-that one plugin leaves QtQuick and QtQml unreferenced, dropping those orphans QtQmlModels, and
-dropping the QML stack orphans ICU, which on macOS nothing else uses — so the script sweeps
-`Frameworks/` repeatedly for anything no remaining binary links, which takes the bundle from 94 MB
-to 37 MB and leaves exactly the seven Qt frameworks `target_link_libraries` names. Only
-`Frameworks/` is swept: plugins are opened by name at runtime, so nothing links them and the same
-test would call every one of them garbage.
-
-Three checks then run, in the order that makes the sweep safe to have done at all:
-
-- **Plugins that have to be there.** macdeployqt picks plugins by guessing from the binary's
-  linkage and says nothing when it guesses wrong. Both are loaded by name, so a missing one is not
-  a link error: without `libqcocoa` the app starts with no window, and without `libqsqlite` history
-  fails at runtime with "Driver not loaded".
-- **No reference outside the bundle.** A framework macdeployqt did not know to copy stays an
-  absolute path into the build machine's Homebrew prefix — the failure that shows up only on
-  somebody else's Mac.
-- **No reference the bundle cannot resolve.** The converse, and what keeps the sweep honest:
-  over-pruning cannot show up as a build error, only as a dyld failure at launch on a user's
-  machine.
-
-The disk image is built by `hdiutil` from a staging folder holding the app beside a symlink to
-`/Applications`, which is the drag-to-install layout with no dependency past what macOS ships.
-`create-dmg` would give a nicer window, but it positions icons over AppleScript, which needs a
-logged-in GUI session and so fails on a CI runner.
-
-There is no universal binary. A Homebrew Qt is thin, so one would mean `lipo`-ing a tree of
-frameworks by hand or switching to the official Qt installer; `.github/workflows/macos.yml` builds
-each architecture on a runner of that architecture instead, exactly as the Debian packages are
-built. Both runners are macOS 15 so the two share a deployment target — which also means the DMGs
-want macOS 15 or newer, since the bundled Qt is a Homebrew bottle built for that release.
-`macos-15-intel` is the last x86-64 image GitHub will offer, and it goes away in August 2027.
-
-### Ad-hoc signing
-
-The bundle is signed, but with an ad-hoc signature rather than a Developer ID. That is the floor,
-not a nicety: Apple Silicon refuses to execute a Mach-O carrying no signature at all. Signing runs
-after `macdeployqt`, which rewrites load commands and would invalidate a seal applied first, and
-inside-out, because signing a nested binary after its container breaks the container's signature.
-The hardened runtime is deliberately not enabled — it is what notarization requires, and on an
-ad-hoc signature it only adds restrictions.
-
-What ad-hoc does not do is satisfy Gatekeeper. A downloaded DMG is quarantined, and since macOS 15
-the Control-click → Open bypass no longer works, so the app has to be allowed once from
-**System Settings → Privacy & Security → Open Anyway**, or:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/Corelet.app
-```
-
-Two consequences worth knowing. macOS keys the Bluetooth permission to the bundle's code identity,
-and an ad-hoc signature is a fresh identity on every build, so the BLE prompt can reappear after an
-update or stick in a denied state — deleting the entry under Privacy & Security → Bluetooth clears
-it. And a Homebrew cask would not help: casks quarantine by default. Both go away with a paid
-Developer ID, which turns the extra steps into `codesign --options runtime -s "Developer ID
-Application: ..."`, `xcrun notarytool submit --wait` and `xcrun stapler staple`.
-
-## Releases
-
-Pushing a version tag is the whole release process. `.github/workflows/release.yml` calls the two
-build workflows above — the same ones that run on every push, called rather than copied so a
-release is never built differently from what CI has been testing — waits for all four packages, and
-publishes them to a GitHub release together with a `SHA256SUMS` file. Nothing here is notarized or
-signed with a key a stranger can check against, so those checksums are the only verification a
-download has.
-
-```sh
-# CMakeLists.txt and debian/changelog already say 0.2.0
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-A version tag is `v` followed by a semver version, and only those are releases. The workflow's tag
-filter is as close to semver as GitHub's glob syntax gets — it cannot express "no leading zeros" or
-the prerelease grammar — so a job then checks the tag against semver's own regex and skips the run
-when it does not match. `v2-wip` or a moving `nightly` starts nothing; `v0.2.0-rc.1` publishes as a
-prerelease; build metadata after a `+` is allowed and does not make one.
-
-The one thing a tag cannot do is set the version. The `.deb` takes its version from
-`debian/changelog` because the source format is native, and the DMG takes its from
-`project(... VERSION ...)`, so a tag ahead of either would publish the *previous* version's files
-under a new name. That case fails the build rather than being skipped — it is a mistake in the tag
-rather than a tag meant for something else.
-
-Both `-dbgsym` packages stay out of the release. They are for debugging a build you already have,
-and they would double the asset list on a page most people visit for one file; CI still uploads
-them as build artifacts on every push.
-
-## Running
-
-Started with no arguments, the app asks what to connect to: a host and port, or a device picked
-from a Bluetooth scan. It remembers the answer, and the node pane shows the current target; use
-its connection button to disconnect or choose another target.
-
-Naming a target on the command line skips the dialog:
-
-```sh
-./build/corelet --host 10.0.0.4 --port 5099
-./build/corelet --ble MeshCore-3f2a      # advertised name, or an address
-```
-
-Over TCP the daemon must be running and its `companion_port` must match. That protocol has **no
-authentication**, so the default is loopback; only point it at another host across a network you
-control.
-
-Over BLE the device must be in range and not already connected to another app — MeshCore firmware
-serves one companion at a time. macOS asks for Bluetooth permission the first time; on Linux the
-user needs to be able to talk to BlueZ, which the default `bluetooth` group grants.
-
-`etc/corelet.desktop` is installed by `cmake --install` and by the Debian package, so the app shows
-up in the uConsole's launcher. `corelet(1)` documents the options.
-
-## How it talks to the daemon
-
-Worth knowing before changing anything in `src/protocol/`:
-
-- **Replies are untagged.** Nothing in a response says which command it answers, so exactly one
-  command is in flight at a time and the rest queue behind it (`CompanionClient::pump`). Sending
-  two commands and matching replies by shape would work until two commands shared a reply code.
-- **Pushes are interleaved.** Codes `>= 0x80` are unsolicited and are routed before the queue is
-  consulted. `PUSH_MSG_WAITING` is what drives collection of new messages.
-- **`SYNC_NEXT_MESSAGE` pops.** Collecting a message removes it from the daemon's inbox, so the
-  daemon is not storage — the app appends everything it collects to the device's SQLite database
-  under `QStandardPaths::AppDataLocation/history/`. That database *is* your history; the daemon has
-  no copy.
-- **This includes direct messages.** v1 has no DM view, but running this app still drains DMs from
-  the shared inbox. They are written to the device's database under channel `-1` rather than
-  dropped, and the status bar reports when one arrives.
-- **All 8 channel slots always answer.** `GET_CHANNEL` returns an entry for every slot; unused ones
-  have an all-zero key, which is how the app tells configured channels apart. Slots are sparse and
-  are only wire addresses. Persistent selection, cache entries and message history use a SHA-256
-  fingerprint of the channel key instead, nested under the node's public key.
-- **Nothing on the wire says what kind of channel a slot holds.** `GET_CHANNEL` answers with a name
-  and a key and no more, so the sidebar's public / hashtag / private icon is deduced from the key
-  exactly as the daemon builds them: the well-known public key is a constant, a hashtag key is
-  SHA-256 over the name with the `#` included, and anything else arrived out of band. The offline
-  channel cache stores the answer rather than the key, which stays in the daemon's state directory.
-- **Channel messages carry the sender in the text.** They are sent as `"Name: body"` because a
-  channel message has no per-sender key. The app splits that back out for display, which means
-  **the sender name is unauthenticated** and anyone on the channel can claim any name.
-- **Our own messages never come back.** A sent channel message is echoed into the local history
-  when the daemon acknowledges it, or it would never appear.
-- **Only the framing differs between links.** TCP is a byte stream, so commands carry the `<`
-  length prefix and replies have to be de-framed incrementally. BLE is message-oriented: one GATT
-  write is one command, one notification is one reply, and the prefix is absent. Everything above
-  `proto::Transport` — the queue, the handshake, the sync drain — is the same either way.
-- **BLE is the Nordic UART service.** `6e400001-…`, writing to `…0002` and subscribing to `…0003`.
-  A device is identified by whatever handle the local adapter gives it, which is an address under
-  BlueZ and an opaque per-host UUID under CoreBluetooth, so the advertised name is stored alongside
-  it and used to re-find the device when the handle goes stale.
-
-## Layout
-
-```
-src/
-  protocol/   companion codes, frame codec, the TCP and BLE transports,
-              the client and its command queue
-  model/      channel + message types, persistent history, the two list models
-  ui/         main window, connect dialog, the two list delegates, theme,
-              icons/ (Lucide SVGs, ISC — see its LICENSE)
-```
-
-## Notes on the UI
-
-The uConsole panel is 1280x480 — wide and very short. Padding is deliberately tighter than a
-desktop default, the sidebar is narrow, and the chat is a `QListView` with a custom delegate so
-only visible rows are laid out and painted. A `QTextBrowser` full of HTML would re-layout the whole
-conversation on every message, which is noticeable on a CM4.
-
-Messages anchor to the bottom of the pane. New ones only auto-scroll when you are already at the
-bottom, so reading back is not interrupted by traffic. An accent divider marks the first unseen
-message when returning to a channel, or when new traffic arrives while its view is scrolled back.
-
-A sidebar row is one line: a channel-type icon, the name, when the channel last carried traffic,
-and an unread pill. The stamp is the clock time for today, `dd/MM` for this year and `dd/MM/yy`
-for anything older — short enough that the column stays narrow. There is no message preview: on a
-480-row panel a second line halves how many channels fit, and the icon plus the time answer the
-question a sidebar is actually scanned for.
+`ctest --test-dir build` runs the tests. Packaging scripts for both platforms live in `scripts/`,
+and `CLAUDE.md` documents how they and the CI workflows fit together.
 
 ## License
 
-GPL-3.0-or-later, matching the daemon.
+Corelet is free software under the **GPL-3.0-or-later**. There is no warranty; see the license
+for the exact terms.
+
+The icons used are [Lucide](https://lucide.dev), used under the ISC license — some of them
+derive from Feather and carry its MIT terms too. `src/ui/icons/LICENSE` and `debian/copyright` have
+the details.

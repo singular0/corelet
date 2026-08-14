@@ -2,9 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+`README.md` is written for end users: what the app does, how to install a released package, the
+command-line options, license. Keep maintainer detail — packaging internals, CI, protocol
+constraints, UI rationale — here rather than there, and don't let the two drift into duplicating
+each other.
+
 ## Build
 
-Qt 6 Widgets, C++20, no dependencies beyond Qt. There is no test suite and no formatter config.
+Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are two CTest binaries
+built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`); run them with
+`ctest --test-dir build`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
+the history test opens a real QSQLITE database and `dh_auto_test` fails without the driver plugin.
 
 ```sh
 # macOS (Homebrew Qt) — the configured build dir already points at /usr/local/opt/qt
@@ -28,7 +36,11 @@ won't compile. `compile_commands.json` is a symlink into `build/`.
 `debian/` packages the same tree for arm64 (uConsole) and amd64. `scripts/build-deb.sh` with no
 argument runs `dpkg-buildpackage` natively; `deps` installs Build-Depends first; `arm64|amd64|all`
 sets up a `debian:trixie` container and runs that same native path inside it, which is what works
-from macOS. Output goes to `dist/`.
+from macOS. Output goes to `dist/`, each `.deb` beside the `-dbgsym` package holding its symbols;
+install one as `sudo apt install ./dist/corelet_0.1.0_arm64.deb` so apt resolves the Qt runtime.
+A foreign architecture runs under Docker's qemu binfmt handler, so an arm64 build on an x86 host
+takes about half an hour against four minutes native — fine for a one-off, which is the only thing
+it is for.
 
 CI (`.github/workflows/debian.yml`) builds each architecture on its own runner rather than
 cross-compiling or emulating: debhelper skips `dh_auto_test` when the host architecture differs
@@ -44,14 +56,47 @@ has to keep linking against Homebrew Qt for development — runs `macdeployqt`, 
 packages with `hdiutil`. Its version comes from `CMakeLists.txt` alone, so nothing can drift.
 After `macdeployqt` it drops Qt's virtual-keyboard input context and then sweeps `Frameworks/` for
 anything no remaining binary links, which is what keeps the QML runtime and ICU out of a Widgets
-app (94 MB to 37 MB). Don't remove the sweep's `check_no_dangling` guard: over-pruning surfaces
-only as a dyld failure on a user's machine, never as a build error.
+app (94 MB to 37 MB): dropping that one plugin orphans QtQuick and QtQml, which orphans
+QtQmlModels, which orphans ICU. Only `Frameworks/` is swept — plugins are opened by name at
+runtime, so nothing links them and the same test would call every one of them garbage.
+
+Three checks then run, and all three are load-bearing:
+
+- **Plugins that must be present.** macdeployqt guesses plugins from linkage and says nothing when
+  it guesses wrong. `libqcocoa` and `libqsqlite` are loaded by name, so a missing one is not a link
+  error: no cocoa means the app starts with no window, no sqlite means history dies at runtime with
+  "Driver not loaded".
+- **No reference outside the bundle** — a framework macdeployqt did not copy stays an absolute path
+  into the build machine's Homebrew prefix, which only fails on somebody else's Mac.
+- **No dangling reference** (`check_no_dangling`). Don't remove it: over-pruning surfaces only as a
+  dyld failure on a user's machine, never as a build error.
+
+The image is `hdiutil`-built from a staging folder holding the app beside a symlink to
+`/Applications` — the drag-to-install layout with no dependency past what macOS ships.
+
 `.github/workflows/macos.yml` builds arm64 on `macos-15` and x86-64 on `macos-15-intel`; there is no
 universal binary because a Homebrew Qt is thin, and no `create-dmg` because it positions icons over
-AppleScript, which needs a GUI session a runner does not have. Signing runs after `macdeployqt`
-(which rewrites load commands) and inside-out (a nested binary signed after its container breaks
-the container's seal); don't add `--options runtime`, which only means something under
-notarization.
+AppleScript, which needs a GUI session a runner does not have. Both runners are macOS 15, so the
+DMGs want macOS 15 or newer — the bundled Qt is a Homebrew bottle built for that release.
+`macos-15-intel` is the last x86-64 image GitHub will offer and goes away in August 2027.
+
+Signing runs after `macdeployqt` (which rewrites load commands) and inside-out (a nested binary
+signed after its container breaks the container's seal); don't add `--options runtime`, which only
+means something under notarization. Ad-hoc is the floor rather than a nicety — Apple Silicon
+refuses to execute an unsigned Mach-O — but it does not satisfy Gatekeeper, and since macOS 15 the
+Control-click bypass is gone, so users clear quarantine by hand (the README says how). Two
+consequences: macOS keys the Bluetooth permission to the bundle's code identity, which an ad-hoc
+signature changes on every build, so the prompt can reappear or stick as denied; and a Homebrew
+cask would not help, because casks quarantine by default. Both dissolve with a paid Developer ID,
+which turns this into `codesign --options runtime -s "Developer ID Application: ..."`,
+`xcrun notarytool submit --wait` and `xcrun stapler staple`.
+
+Pushing a version tag is the whole release process — bump `CMakeLists.txt` and `debian/changelog`
+first, then `git tag v0.2.0 && git push origin v0.2.0`. The release publishes all four packages
+plus a `SHA256SUMS` file, which is the only verification a download has since nothing is notarized
+or signed against a key a stranger can check. Both `-dbgsym` packages stay out of the release —
+they are for debugging a build you already have and would double the asset list — but CI still
+uploads them as build artifacts on every push.
 
 `debian.yml` and `macos.yml` build on push and PR and are also `workflow_call`-able;
 `.github/workflows/release.yml` is the only thing triggered by a tag and calls both, so a release
@@ -92,8 +137,10 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
   machine that owns the link.
 - **`model/`** — `Channel`/`Message` value types, the SQLite `History`, and two `QAbstractListModel`s
   (`ChannelModel` for the sidebar, `ChatModel` for the open conversation).
-- **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, two item delegates,
-  the dark `theme`, and SVG icons in a `.qrc`.
+- **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, `NodePane`, the
+  add/share channel dialogs, two item delegates, the dark `theme`, and SVG icons in a `.qrc`
+  (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
+  `debian/copyright`, which are what the README's license section points at).
 
 This is a client only. All radio work, crypto and channel state live in `umeshcored`
 (`../umeshcore`) or the device firmware.
@@ -124,6 +171,10 @@ Violating any of these produces bugs that only show up against a real device:
 - **Only framing differs between links.** `Transport` hides it: TCP length-prefixes and de-frames
   incrementally, BLE is one Nordic UART write/notification per frame. Everything above `Transport`
   is link-agnostic; don't add transport branches to `CompanionClient`.
+- **BLE is the Nordic UART service** — `6e400001-...`, writing `...0002` and subscribing `...0003`.
+  A device handle is whatever the local adapter gives it, an address under BlueZ and an opaque
+  per-host UUID under CoreBluetooth, so the advertised name is stored alongside it and used to
+  re-find the device when the handle goes stale.
 - The enums in `protocol/protocol.h` are wire numbers mirroring the daemon's
   `src/companion/frames.h`. Never renumber; append only.
 
@@ -158,5 +209,17 @@ The uConsole panel is 1280x480 — wide and very short. The chat is a `QListView
 delegate specifically so only visible rows lay out and paint; a `QTextBrowser` of HTML would
 re-layout the whole conversation per message, which is visible on a CM4. Keep per-paint work out of
 delegates (e.g. `ChannelModel` pre-flattens the sidebar preview string). Vertical space is the
-scarce resource: padding is deliberately tighter than desktop defaults, and sidebar rows are one
-line.
+scarce resource: padding is deliberately tighter than desktop defaults, and a sidebar row is two
+tight lines rather than the three a desktop client would spend.
+
+### UI behaviour that is deliberate
+
+- Messages anchor to the bottom, and new ones auto-scroll **only when the view is already at the
+  bottom** (`MainWindow::appendToView`) — yanking the view while the user reads back is worse than
+  a missed jump. An accent divider marks the first unseen message when returning to a channel or
+  when traffic arrives while the view is scrolled back.
+- A sidebar row is a channel-type icon plus two lines: the name, then the newest message with its
+  stamp and an unread pill. `ChannelDelegate::activityStamp` gives the clock time alone for
+  anything inside 24 hours and prepends `d MMM` beyond that — a channel list is scanned rather
+  than read, and a bare time on a week-old row means nothing. Mesh timestamps can sit slightly in
+  the future when a sender's clock runs fast, which still counts as just now.
