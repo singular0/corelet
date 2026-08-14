@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOption>
@@ -23,6 +24,8 @@
 
 namespace {
 
+constexpr int RowIconSize = 14;
+
 // Everything but the node's own name is a footnote to the channel list above
 // it, and sits a step below the body font — the same step the sidebar rows use.
 QFont subFont(const QFont& base) {
@@ -32,27 +35,36 @@ QFont subFont(const QFont& base) {
 }
 
 ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
-                    const QString& iconName = {}, QLabel** iconOut = nullptr) {
+                    const QString& iconName = {}, QLabel** iconOut = nullptr,
+                    QWidget** rowOut = nullptr) {
     auto* row = new QWidget;
     auto* rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(0, 0, 0, 0);
     rowLayout->setSpacing(5);
 
-    if (!iconName.isEmpty()) {
-        constexpr int IconSize = 14;
-        auto* icon = new QLabel;
-        icon->setFixedSize(IconSize, IconSize);
-        icon->setPixmap(icons::tinted(iconName, IconSize, theme::TextMuted,
-                                      layout->parentWidget()->devicePixelRatioF()));
-        icon->setAlignment(Qt::AlignCenter);
-        rowLayout->addWidget(icon);
-        if (iconOut) *iconOut = icon;
-    }
+    // Every row owns the same icon column, including status: its coloured dot
+    // changes independently of the text, but both stay aligned with the rows
+    // above it.
+    auto* icon = new QLabel;
+    icon->setFixedSize(RowIconSize, RowIconSize);
+    if (!iconName.isEmpty())
+        icon->setPixmap(icons::tinted(iconName, RowIconSize, theme::TextMuted,
+                                     layout->parentWidget()->devicePixelRatioF()));
+    icon->setAlignment(Qt::AlignCenter);
+    rowLayout->addWidget(icon);
+    if (iconOut) *iconOut = icon;
 
     auto* label = new ElidedLabel;
     label->setFont(font);
     label->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
     rowLayout->addWidget(label, 1);
+
+    if (rowOut) {
+        // Let an interactive row receive clicks made over either child too.
+        icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        *rowOut = row;
+    }
     layout->addWidget(row);
     return label;
 }
@@ -118,7 +130,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     auto* details = new QWidget;
     auto* detailsLayout = new QVBoxLayout(details);
     detailsLayout->setContentsMargins(10, 5, 8, 6);
-    detailsLayout->setSpacing(1);
+    detailsLayout->setSpacing(3);
 
     QFont nameFont = font();
     nameFont.setBold(true);
@@ -127,11 +139,12 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     target_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
                      QStringLiteral("server"), &targetIcon_);
     battery_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
-                      QStringLiteral("battery-medium"));
-    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted);
+                      QStringLiteral("battery-medium"), &batteryIcon_, &batteryRow_);
+    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted, {}, &statusIndicator_);
 
-    name_->setFullText(QStringLiteral("Node unavailable"));
-    battery_->setFullText(QStringLiteral("Battery unavailable"));
+    name_->setFullText(QStringLiteral("unavailable"));
+    batteryRow_->installEventFilter(this);
+    updateBatteryDisplay();
 
     layout->addWidget(header);
     layout->addWidget(details);
@@ -157,11 +170,53 @@ void NodePane::setTarget(const proto::ConnectTarget& target) {
 
 void NodePane::setDevice(const proto::CompanionClient::DeviceInfo& info) {
     device_ = info;
-    name_->setFullText(info.name.isEmpty() ? QStringLiteral("Node unavailable") : info.name);
-    battery_->setFullText(info.batteryPercent < 0
-                              ? QStringLiteral("Battery unavailable")
-                              : QStringLiteral("%1%").arg(info.batteryPercent));
+    name_->setFullText(info.name.isEmpty() ? QStringLiteral("unavailable") : info.name);
+    updateBatteryDisplay();
     infoButton_->setEnabled(connected_ && info.pubkey.size() == 32);
+}
+
+bool NodePane::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == batteryRow_ && event->type() == QEvent::MouseButtonRelease) {
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton && connected_ &&
+            device_.batteryPercent >= 0 && device_.batteryMillivolts >= 0) {
+            showBatteryVoltage_ = !showBatteryVoltage_;
+            updateBatteryDisplay();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void NodePane::updateBatteryDisplay() {
+    const bool available =
+        connected_ && device_.batteryPercent >= 0 && device_.batteryMillivolts >= 0;
+
+    QColor tint = theme::TextMuted;
+    if (available && device_.batteryPercent <= 10)
+        tint = theme::Error;
+    else if (available && device_.batteryPercent <= 25)
+        tint = theme::Warning;
+    battery_->setStyleSheet(QStringLiteral("color: %1;").arg(tint.name()));
+    batteryIcon_->setPixmap(
+        icons::tinted(QStringLiteral("battery-medium"), RowIconSize, tint, devicePixelRatioF()));
+
+    if (!available) {
+        battery_->setFullText(QStringLiteral("unavailable"));
+        batteryRow_->unsetCursor();
+        batteryRow_->setToolTip({});
+        return;
+    }
+
+    if (showBatteryVoltage_) {
+        battery_->setFullText(
+            QStringLiteral("%1 V").arg(device_.batteryMillivolts / 1000.0, 0, 'f', 3));
+        batteryRow_->setToolTip(QStringLiteral("Click to show battery percentage"));
+    } else {
+        battery_->setFullText(QStringLiteral("%1%").arg(device_.batteryPercent));
+        batteryRow_->setToolTip(QStringLiteral("Click to show battery voltage"));
+    }
+    batteryRow_->setCursor(Qt::PointingHandCursor);
 }
 
 void NodePane::showDeviceInfo() {
@@ -245,9 +300,21 @@ void NodePane::showDeviceInfo() {
 
 void NodePane::setConnection(const QString& text, const QColor& color, bool active,
                              bool connected) {
-    status_->setFullText(QStringLiteral("● %1").arg(text));
+    QPixmap indicator(QSize(RowIconSize, RowIconSize) * devicePixelRatioF());
+    indicator.setDevicePixelRatio(devicePixelRatioF());
+    indicator.fill(Qt::transparent);
+    QPainter painter(&indicator);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawEllipse(QRectF(3, 3, 8, 8));
+    painter.end();
+
+    statusIndicator_->setPixmap(indicator);
+    status_->setFullText(text);
     status_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
     connected_ = connected;
+    updateBatteryDisplay();
     infoButton_->setEnabled(connected_ && device_.pubkey.size() == 32);
     if (active == connectionActive_) return;
 

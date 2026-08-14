@@ -5,6 +5,7 @@
 #include "protocol/client.h"
 
 class ElidedLabel;
+class QEvent;
 class QLabel;
 class QToolButton;
 
@@ -33,15 +34,20 @@ Q_SIGNALS:
     void disconnectRequested();
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
 private:
     void showDeviceInfo();
+    void updateBatteryDisplay();
     void updateConnectionAction(bool active);
 
     QToolButton* infoButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;
+    QWidget* batteryRow_ = nullptr;
+    QLabel* batteryIcon_ = nullptr;
     QLabel* targetIcon_ = nullptr;
+    QLabel* statusIndicator_ = nullptr;
     ElidedLabel* name_ = nullptr;
     ElidedLabel* target_ = nullptr;
     ElidedLabel* battery_ = nullptr;
@@ -49,4 +55,5 @@ private:
     proto::CompanionClient::DeviceInfo device_;
     bool connectionActive_ = false;
     bool connected_ = false;
+    bool showBatteryVoltage_ = false;
 };
