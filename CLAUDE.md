@@ -19,8 +19,8 @@ cmake --build build -j4
 ```
 
 The macOS build is a bundle (Bluetooth needs a usage description in `etc/Info.plist.in`), so the
-binary is `./build/umeshcore-app.app/Contents/MacOS/umeshcore-app`. The uConsole build is a plain
-binary at `./build/umeshcore-app`.
+binary is `./build/corelet.app/Contents/MacOS/corelet`. The uConsole build is a plain binary at
+`./build/corelet`.
 
 Sources are listed explicitly in `CMakeLists.txt` — a new `.cpp` must be added there or it silently
 won't compile. `compile_commands.json` is a symlink into `build/`.
@@ -35,16 +35,16 @@ outcome and gives feedback. Report what changed and hand it over.
 
 On macOS `QStandardPaths::AppDataLocation` and `QSettings` resolve through Foundation, **not**
 `$HOME`. Launching with `HOME=/scratch` still writes to the real
-`~/Library/Application Support/umeshcore/umeshcore-app/history/<public-key>.sqlite3` and
-`~/Library/Preferences/com.umeshcore.umeshcore-app.plist`. That device database is the *only* copy
-of received messages (see below), so a run against a stub daemon destroys real user data.
+`~/Library/Application Support/umeshcore/corelet/history/<public-key>.sqlite3` and
+`~/Library/Preferences/com.umeshcore.corelet.plist`. That device database is the *only* copy of
+received messages (see below), so a run against a stub daemon destroys real user data.
 
 Combined with the rule above, there is essentially no reason to run the binary unprompted. If the
 maintainer asks for a run, back up the affected device database first.
 
 ```sh
-./build/umeshcore-app --host 10.0.0.4 --port 5099   # skips the connect dialog
-./build/umeshcore-app --ble MeshCore-3f2a           # advertised name, or an adapter handle
+./build/corelet --host 10.0.0.4 --port 5099   # skips the connect dialog
+./build/corelet --ble MeshCore-3f2a          # advertised name, or an adapter handle
 ```
 
 ## Architecture
@@ -95,7 +95,7 @@ Violating any of these produces bugs that only show up against a real device:
 - `history/<public-key>.sqlite3` under `QStandardPaths::AppDataLocation` — one SQLite database per
   device, capped at `History::MaxPerChannel` (500) messages per channel. Rows are indexed by a
   SHA-256 fingerprint of the channel key; the device identity is carried by the filename.
-- `QSettings` (org `umeshcore`, app `umeshcore-app`) holds global `geometry`, `splitter` and the
+- `QSettings` (org `umeshcore`, app `corelet`) holds global `geometry`, `splitter` and the
   `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
   below that are keyed by channel-key fingerprint and the selected channel is stored by the same
   fingerprint. The secret channel keys stay in the daemon.

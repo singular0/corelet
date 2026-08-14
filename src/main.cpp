@@ -10,9 +10,9 @@
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    QApplication::setApplicationName(QStringLiteral("umeshcore-app"));
+    QApplication::setApplicationName(QStringLiteral("corelet"));
     QApplication::setOrganizationName(QStringLiteral("umeshcore"));
-    QApplication::setApplicationVersion(QStringLiteral(UMESHCORE_APP_VERSION));
+    QApplication::setApplicationVersion(QStringLiteral(CORELET_VERSION));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
 
     QCommandLineParser parser;

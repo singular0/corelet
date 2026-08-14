@@ -1,4 +1,4 @@
-# umeshcore-app
+# corelet
 
 A MeshCore companion app for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole),
 talking to [`umeshcored`](../umeshcore) over the companion protocol on loopback, or straight to a
@@ -48,8 +48,8 @@ cmake --build build
 ```
 
 The Mac build is a bundle — macOS refuses Bluetooth to a process with no usage description, and
-only a bundle has anywhere to declare one — so it runs from
-`./build/umeshcore-app.app/Contents/MacOS/umeshcore-app`. The uConsole build is a plain binary.
+only a bundle has anywhere to declare one — so it runs from `./build/corelet.app/Contents/MacOS/corelet`.
+The uConsole build is a plain binary.
 
 ## Running
 
@@ -60,8 +60,8 @@ its connection button to disconnect or choose another target.
 Naming a target on the command line skips the dialog:
 
 ```sh
-./build/umeshcore-app --host 10.0.0.4 --port 5099
-./build/umeshcore-app --ble MeshCore-3f2a       # advertised name, or an address
+./build/corelet --host 10.0.0.4 --port 5099
+./build/corelet --ble MeshCore-3f2a      # advertised name, or an address
 ```
 
 Over TCP the daemon must be running and its `companion_port` must match. That protocol has **no
@@ -72,7 +72,7 @@ Over BLE the device must be in range and not already connected to another app �
 serves one companion at a time. macOS asks for Bluetooth permission the first time; on Linux the
 user needs to be able to talk to BlueZ, which the default `bluetooth` group grants.
 
-`etc/umeshcore-app.desktop` is installed by `cmake --install`, so the app shows up in the
+`etc/corelet.desktop` is installed by `cmake --install`, so the app shows up in the
 uConsole's launcher.
 
 ## How it talks to the daemon

@@ -254,7 +254,7 @@ void CompanionClient::beginHandshake() {
 
     // APP_START: version byte, six reserved, then the app name.
     Writer start(CmdAppStart);
-    start.u8(1).padded({}, 6).tail(QByteArrayLiteral("umeshcore-app"));
+    start.u8(1).padded({}, 6).tail(QByteArrayLiteral("corelet"));
     enqueue(start.bytes(), [this](quint8 code, Reader& r) {
         if (code != RespSelfInfo) {
             // Whatever is on the other end, it is not speaking this protocol.

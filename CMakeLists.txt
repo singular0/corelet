@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(umeshcore-app
+project(corelet
     VERSION 0.1.0
     DESCRIPTION "MeshCore companion app for the ClockworkPi uConsole"
     LANGUAGES CXX)
@@ -25,7 +25,7 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network Bluetooth Sql 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-add_executable(umeshcore-app
+add_executable(corelet
     src/main.cpp
     src/ui/icons/icons.qrc
     src/protocol/frame_codec.cpp
@@ -47,24 +47,24 @@ add_executable(umeshcore-app
     src/ui/main_window.cpp
 )
 
-target_include_directories(umeshcore-app PRIVATE src)
-target_link_libraries(umeshcore-app PRIVATE
+target_include_directories(corelet PRIVATE src)
+target_link_libraries(corelet PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Bluetooth Qt6::Sql Qt6::Svg)
 
-target_compile_definitions(umeshcore-app PRIVATE
-    UMESHCORE_APP_VERSION="${PROJECT_VERSION}"
+target_compile_definitions(corelet PRIVATE
+    CORELET_VERSION="${PROJECT_VERSION}"
     # Qt's foreach/signals macros collide with anything; keep the namespace clean
     # so this code reads as plain C++.
     QT_NO_KEYWORDS)
 
 if(NOT MSVC)
-    target_compile_options(umeshcore-app PRIVATE
+    target_compile_options(corelet PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
 
 # macOS denies Bluetooth to a process with no usage description, and only a
 # bundle has somewhere to declare one. Run it as
-# ./build/umeshcore-app.app/Contents/MacOS/umeshcore-app.
+# ./build/corelet.app/Contents/MacOS/corelet.
 if(APPLE)
     # Qt asks macOS for Bluetooth access through a permission plugin, and that
     # plugin is static: without it linked in, checkPermission() answers Denied
@@ -72,31 +72,31 @@ if(APPLE)
     # defines the target when it is available, hence the guard rather than a
     # find_package of its own.
     if(TARGET Qt6::QDarwinBluetoothPermissionPlugin)
-        target_link_libraries(umeshcore-app PRIVATE Qt6::QDarwinBluetoothPermissionPlugin)
+        target_link_libraries(corelet PRIVATE Qt6::QDarwinBluetoothPermissionPlugin)
     endif()
 
-    set(MACOSX_BUNDLE_GUI_IDENTIFIER org.umeshcore.app)
-    set(MACOSX_BUNDLE_BUNDLE_NAME umeshcore-app)
+    set(MACOSX_BUNDLE_GUI_IDENTIFIER org.umeshcore.corelet)
+    set(MACOSX_BUNDLE_BUNDLE_NAME corelet)
     set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
-    set_source_files_properties(assets/umeshcore-app.icns PROPERTIES
+    set_source_files_properties(assets/corelet.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
-    target_sources(umeshcore-app PRIVATE assets/umeshcore-app.icns)
-    set_target_properties(umeshcore-app PROPERTIES
+    target_sources(corelet PRIVATE assets/corelet.icns)
+    set_target_properties(corelet PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_ICON_FILE umeshcore-app.icns
+        MACOSX_BUNDLE_ICON_FILE corelet.icns
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/etc/Info.plist.in)
 endif()
 
 include(GNUInstallDirs)
-install(TARGETS umeshcore-app
+install(TARGETS corelet
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE DESTINATION .)
-install(FILES etc/umeshcore-app.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
-install(FILES assets/umeshcore-app.png
+install(FILES etc/corelet.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+install(FILES assets/corelet.png
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps)
 
-message(STATUS "umeshcore-app ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
+message(STATUS "corelet ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
 
 include(CTest)
 if(BUILD_TESTING)

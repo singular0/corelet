@@ -24,6 +24,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>umeshcore-app talks to your MeshCore device over Bluetooth LE.</string>
+    <string>corelet talks to your MeshCore device over Bluetooth LE.</string>
 </dict>
 </plist>

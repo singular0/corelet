@@ -173,7 +173,7 @@ QSqlDatabase History::databaseFor(const QByteArray& deviceId) const {
 
     const QString deviceName = QString::fromLatin1(deviceId.toHex());
     const QString connectionName =
-        QStringLiteral("umeshcore-history-%1-%2")
+        QStringLiteral("corelet-history-%1-%2")
             .arg(quintptr(this), 0, 16)
             .arg(deviceName);
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);

@@ -1,7 +1,7 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
     <qresource prefix="/icons">
-        <file alias="app.png">../../../assets/umeshcore-app.png</file>
+        <file alias="app.png">../../../assets/corelet.png</file>
         <file>globe.svg</file>
         <file>lock.svg</file>
         <file>hash.svg</file>
