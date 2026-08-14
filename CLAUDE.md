@@ -30,7 +30,7 @@ argument runs `dpkg-buildpackage` natively; `deps` installs Build-Depends first;
 sets up a `debian:trixie` container and runs that same native path inside it, which is what works
 from macOS. Output goes to `dist/`.
 
-CI (`.github/workflows/deb.yml`) builds each architecture on its own runner rather than
+CI (`.github/workflows/debian.yml`) builds each architecture on its own runner rather than
 cross-compiling or emulating: debhelper skips `dh_auto_test` when the host architecture differs
 from the build one, so a cross-built package would ship untested. Don't add a cross path.
 
@@ -46,14 +46,14 @@ After `macdeployqt` it drops Qt's virtual-keyboard input context and then sweeps
 anything no remaining binary links, which is what keeps the QML runtime and ICU out of a Widgets
 app (94 MB to 37 MB). Don't remove the sweep's `check_no_dangling` guard: over-pruning surfaces
 only as a dyld failure on a user's machine, never as a build error.
-`.github/workflows/dmg.yml` builds arm64 on `macos-15` and x86-64 on `macos-15-intel`; there is no
+`.github/workflows/macos.yml` builds arm64 on `macos-15` and x86-64 on `macos-15-intel`; there is no
 universal binary because a Homebrew Qt is thin, and no `create-dmg` because it positions icons over
 AppleScript, which needs a GUI session a runner does not have. Signing runs after `macdeployqt`
 (which rewrites load commands) and inside-out (a nested binary signed after its container breaks
 the container's seal); don't add `--options runtime`, which only means something under
 notarization.
 
-`deb.yml` and `dmg.yml` build on push and PR and are also `workflow_call`-able;
+`debian.yml` and `macos.yml` build on push and PR and are also `workflow_call`-able;
 `.github/workflows/release.yml` is the only thing triggered by a tag and calls both, so a release
 is built by the same jobs CI already runs and a tag never builds twice. Neither packaging workflow
 should get a tag trigger back. Releases are `v` + semver only: the `tags:` glob is the closest

@@ -75,21 +75,21 @@ jobs:
 
   # The same workflows that build every push, called rather than copied so a
   # release cannot be built differently from what CI has been testing all along.
-  deb:
+  debian:
     needs: gate
     if: needs.gate.outputs.release == 'true'
-    uses: ./.github/workflows/deb.yml
+    uses: ./.github/workflows/debian.yml
 
-  dmg:
+  macos:
     needs: gate
     if: needs.gate.outputs.release == 'true'
-    uses: ./.github/workflows/dmg.yml
+    uses: ./.github/workflows/macos.yml
 
   # One release for all four packages, and only once every one of them is
   # built: a release missing an architecture is worse than one that arrives a
   # few minutes later. Skipping either build job skips this too.
   publish:
-    needs: [gate, deb, dmg]
+    needs: [gate, debian, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

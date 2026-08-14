@@ -83,7 +83,7 @@ There is no cross-compilation path on purpose. It would be faster than qemu, but
 `dh_auto_test` whenever the host architecture differs from the build one, so a cross-built package
 ships untested, and it would be a second build path to keep working for one small app.
 
-`.github/workflows/deb.yml` builds both packages on each push, each on a runner of its own
+`.github/workflows/debian.yml` builds both packages on each push, each on a runner of its own
 architecture — `ubuntu-latest` and `ubuntu-24.04-arm`, both inside a `debian:trixie` container — so
 neither emulation nor a cross toolchain is involved and both packages run their tests. GitHub's
 arm64 runners are free for public repositories; on a private one without them, drop the container
@@ -138,7 +138,7 @@ The disk image is built by `hdiutil` from a staging folder holding the app besid
 logged-in GUI session and so fails on a CI runner.
 
 There is no universal binary. A Homebrew Qt is thin, so one would mean `lipo`-ing a tree of
-frameworks by hand or switching to the official Qt installer; `.github/workflows/dmg.yml` builds
+frameworks by hand or switching to the official Qt installer; `.github/workflows/macos.yml` builds
 each architecture on a runner of that architecture instead, exactly as the Debian packages are
 built. Both runners are macOS 15 so the two share a deployment target — which also means the DMGs
 want macOS 15 or newer, since the bundled Qt is a Homebrew bottle built for that release.

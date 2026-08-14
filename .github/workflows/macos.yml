@@ -1,6 +1,6 @@
-name: dmg
+name: macos
 
-# As in deb.yml: tags are release.yml's, which calls this workflow, so a tag
+# As in debian.yml: tags are release.yml's, which calls this workflow, so a tag
 # does not also build here on its own.
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  # Same shape as deb.yml and for the same reason: each architecture builds on
+  # Same shape as debian.yml and for the same reason: each architecture builds on
   # a runner of its own architecture. A Homebrew Qt is thin, so there is no
   # universal bundle to produce from one job, and lipo-ing a tree of frameworks
   # by hand to fake one is not worth two DMGs.

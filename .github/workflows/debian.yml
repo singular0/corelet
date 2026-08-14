@@ -1,4 +1,4 @@
-name: deb
+name: debian
 
 # workflow_call is what release.yml builds with, so a tag runs these jobs once,
 # as part of the release, rather than once here and once there against the same
