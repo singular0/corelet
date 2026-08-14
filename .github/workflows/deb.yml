@@ -1,11 +1,14 @@
 name: deb
 
+# workflow_call is what release.yml builds with, so a tag runs these jobs once,
+# as part of the release, rather than once here and once there against the same
+# commit. Nothing tag-shaped is triggered from this file for that reason.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -44,8 +47,10 @@ jobs:
       - name: Build package
         run: ./scripts/build-deb.sh
 
+      # Named to match the DMG jobs' artifacts: release.yml collects every
+      # platform's output with one corelet-* pattern.
       - uses: actions/upload-artifact@v4
         with:
-          name: corelet-${{ matrix.arch }}
+          name: corelet-deb-${{ matrix.arch }}
           path: dist/*.deb
           if-no-files-found: error

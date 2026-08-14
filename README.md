@@ -142,8 +142,7 @@ frameworks by hand or switching to the official Qt installer; `.github/workflows
 each architecture on a runner of that architecture instead, exactly as the Debian packages are
 built. Both runners are macOS 15 so the two share a deployment target — which also means the DMGs
 want macOS 15 or newer, since the bundled Qt is a Homebrew bottle built for that release.
-`macos-15-intel` is the last x86-64 image GitHub will offer, and it goes away in August 2027. On a
-tag the workflow opens a draft release with both DMGs attached.
+`macos-15-intel` is the last x86-64 image GitHub will offer, and it goes away in August 2027.
 
 ### Ad-hoc signing
 
@@ -168,6 +167,36 @@ update or stick in a denied state — deleting the entry under Privacy & Securit
 it. And a Homebrew cask would not help: casks quarantine by default. Both go away with a paid
 Developer ID, which turns the extra steps into `codesign --options runtime -s "Developer ID
 Application: ..."`, `xcrun notarytool submit --wait` and `xcrun stapler staple`.
+
+## Releases
+
+Pushing a version tag is the whole release process. `.github/workflows/release.yml` calls the two
+build workflows above — the same ones that run on every push, called rather than copied so a
+release is never built differently from what CI has been testing — waits for all four packages, and
+publishes them to a GitHub release together with a `SHA256SUMS` file. Nothing here is notarized or
+signed with a key a stranger can check against, so those checksums are the only verification a
+download has.
+
+```sh
+# CMakeLists.txt and debian/changelog already say 0.2.0
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+A version tag is `v` followed by a semver version, and only those are releases. The workflow's tag
+filter is as close to semver as GitHub's glob syntax gets — it cannot express "no leading zeros" or
+the prerelease grammar — so a job then checks the tag against semver's own regex and skips the run
+when it does not match. `v2-wip` or a moving `nightly` starts nothing; `v0.2.0-rc.1` publishes as a
+prerelease; build metadata after a `+` is allowed and does not make one.
+
+The one thing a tag cannot do is set the version. The `.deb` takes its version from
+`debian/changelog` because the source format is native, and the DMG takes its from
+`project(... VERSION ...)`, so a tag ahead of either would publish the *previous* version's files
+under a new name. That case fails the build rather than being skipped — it is a mistake in the tag
+rather than a tag meant for something else.
+
+Both `-dbgsym` packages stay out of the release. They are for debugging a build you already have,
+and they would double the asset list on a page most people visit for one file; CI still uploads
+them as build artifacts on every push.
 
 ## Running
 

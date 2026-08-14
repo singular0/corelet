@@ -1,0 +1,141 @@
+name: release
+
+# Version tags only. The glob is the closest GitHub's filter syntax gets to
+# semver -- it has no way to say "no leading zeros" or to spell the prerelease
+# grammar -- so anything obviously not a version (`nightly`, `v2-wip`, a moving
+# `latest`) never starts a run, and the gate job below re-checks what does
+# against the real thing. A tag that gets past the glob but fails the check is
+# skipped rather than failed: an unrecognised tag is not an error, it just is
+# not a release.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: check tag
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+      version: ${{ steps.check.outputs.version }}
+      # What the built files are named, which on a prerelease tag is not the
+      # same string: the packages know nothing about -rc.1.
+      core: ${{ steps.check.outputs.core }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          tag=$GITHUB_REF_NAME
+          version=${tag#v}
+
+          # semver.org's published regex, with its named groups dropped.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          semver+='(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)'
+          semver+='(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?'
+          semver+='(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
+
+          if [[ ! $version =~ $semver ]]; then
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              echo "\`$tag\` is not a semver version tag; nothing built." \
+                  >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+          fi
+
+          # Both packages take their version from the tree, never from the tag:
+          # the .deb's is debian/changelog's because the source format is
+          # native, and the .dmg's is project(... VERSION ...) via
+          # etc/Info.plist.in. So a tag ahead of either one does not produce
+          # what it names -- it produces the previous version's files under a
+          # new release. That is a mistake in the tag, not an unknown tag, so
+          # it fails loudly instead of being skipped.
+          core=${version%%[-+]*}
+          project=$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\{1,\}\([0-9][^[:space:]]*\)[[:space:]]*$/\1/p' \
+              CMakeLists.txt | head -1)
+          changelog=$(sed -n '1s/^corelet (\([^)]*\)).*/\1/p' debian/changelog)
+          if [ "$core" != "$project" ] || [ "$core" != "$changelog" ]; then
+              echo "::error::tag $tag is $core, but CMakeLists.txt says" \
+                   "$project and debian/changelog says $changelog"
+              exit 1
+          fi
+
+          # A prerelease is the -suffix only; build metadata after + may
+          # contain a hyphen of its own and says nothing about stability.
+          prerelease=false
+          [[ ${version%%+*} == *-* ]] && prerelease=true
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "core=$core" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  # The same workflows that build every push, called rather than copied so a
+  # release cannot be built differently from what CI has been testing all along.
+  deb:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    uses: ./.github/workflows/deb.yml
+
+  dmg:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    uses: ./.github/workflows/dmg.yml
+
+  # One release for all four packages, and only once every one of them is
+  # built: a release missing an architecture is worse than one that arrives a
+  # few minutes later. Skipping either build job skips this too.
+  publish:
+    needs: [gate, deb, dmg]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: corelet-*
+          merge-multiple: true
+          path: dist
+
+      # Nothing here is notarized or signed with a key anyone can check
+      # against, so the checksums are the only way a download can be verified
+      # at all. The -dbgsym packages stay out of the release: they are for
+      # debugging a build you already have, and they would double the asset
+      # list on the page people come to for one file.
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum corelet_*.deb Corelet-*.dmg | tee SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Corelet ${{ needs.gate.outputs.version }}
+          prerelease: ${{ needs.gate.outputs.prerelease }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            dist/corelet_*.deb
+            dist/Corelet-*.dmg
+            dist/SHA256SUMS
+          body: |
+            ## Install
+
+            **uConsole and other Debian machines** -- `arm64` for the uConsole,
+            `amd64` for an x86 desktop. Installing the file rather than the
+            bare name is what pulls the Qt runtime in with it:
+
+                sudo apt install ./corelet_${{ needs.gate.outputs.core }}_arm64.deb
+
+            **macOS** -- `arm64` for Apple Silicon, `x86_64` for Intel. The
+            disk images want macOS 15 or newer, since the Qt inside them is a
+            Homebrew bottle built for that release.
+
+            The macOS builds are ad-hoc signed, not notarized, so Gatekeeper
+            refuses them on first launch and the Control-click bypass no
+            longer works. Open the app once from System Settings > Privacy &
+            Security > Open Anyway, or run
+
+                xattr -dr com.apple.quarantine /Applications/Corelet.app

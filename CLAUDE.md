@@ -53,6 +53,15 @@ AppleScript, which needs a GUI session a runner does not have. Signing runs afte
 the container's seal); don't add `--options runtime`, which only means something under
 notarization.
 
+`deb.yml` and `dmg.yml` build on push and PR and are also `workflow_call`-able;
+`.github/workflows/release.yml` is the only thing triggered by a tag and calls both, so a release
+is built by the same jobs CI already runs and a tag never builds twice. Neither packaging workflow
+should get a tag trigger back. Releases are `v` + semver only: the `tags:` glob is the closest
+GitHub's filter syntax gets, and the `gate` job re-checks with semver's regex and *skips* the run
+on a non-match — an unrecognised tag is not a failure. A tag whose version is ahead of
+`debian/changelog` or `project(... VERSION ...)` does fail, because neither package takes its
+version from the tag and the release would carry the previous version's files.
+
 ## Do not visually verify UI work
 
 After implementing a UI feature, stop at "it compiles". Do not launch the app, render a widget to

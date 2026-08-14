@@ -1,11 +1,13 @@
 name: dmg
 
+# As in deb.yml: tags are release.yml's, which calls this workflow, so a tag
+# does not also build here on its own.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -44,29 +46,3 @@ jobs:
           name: corelet-macos-${{ matrix.arch }}
           path: dist/*.dmg
           if-no-files-found: error
-
-  # Tags only, and only once both architectures are packaged: a release with
-  # half its assets is worse than one that arrives a minute later.
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: corelet-macos-*
-          merge-multiple: true
-          path: dist
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.dmg
-          draft: true
-          body: |
-            The macOS builds are ad-hoc signed, not notarized, so Gatekeeper
-            refuses them on first launch. Open the app once from System
-            Settings > Privacy & Security > Open Anyway, or run
-
-                xattr -dr com.apple.quarantine /Applications/Corelet.app
