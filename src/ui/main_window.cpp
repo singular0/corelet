@@ -2,6 +2,7 @@
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -39,6 +40,14 @@ QString historyDirectory() {
 
 QString deviceSettingsGroup(const QByteArray& deviceId) {
     return QStringLiteral("devices/%1").arg(QString::fromLatin1(deviceId.toHex()));
+}
+
+// The title bar is the only place the version is visible: an ad-hoc signed
+// build has no About box worth opening and the Linux package is installed by
+// hand, so a bug report needs the number somewhere permanently on screen.
+QString windowTitleFor(const QString& deviceName) {
+    const QString base = QStringLiteral("Corelet %1").arg(QCoreApplication::applicationVersion());
+    return deviceName.isEmpty() ? base : QStringLiteral("%1 — %2").arg(base, deviceName);
 }
 
 // Every node ships with the Public channel and it is how a stranger is reached
@@ -143,7 +152,7 @@ private:
 
 MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     : QMainWindow(parent), history_(historyDirectory()) {
-    setWindowTitle(QStringLiteral("Corelet"));
+    setWindowTitle(windowTitleFor({}));
 
     client_ = new proto::CompanionClient(this);
     buildUi();
@@ -185,7 +194,7 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     channelModel_->clearTransientState();
     channelModel_->setChannels({});
     chatModel_->setMessages({});
-    setWindowTitle(QStringLiteral("Corelet"));
+    setWindowTitle(windowTitleFor({}));
     nodePane_->setDevice({});
     updateHeader();
     updateInputState();
@@ -911,7 +920,6 @@ void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
         updateInputState();
         updateChannelActions();
     }
-    setWindowTitle(info.name.isEmpty() ? QStringLiteral("Corelet")
-                                       : QStringLiteral("Corelet — %1").arg(info.name));
+    setWindowTitle(windowTitleFor(info.name));
     nodePane_->setDevice(info);
 }
