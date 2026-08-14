@@ -17,6 +17,7 @@
 #include <QVBoxLayout>
 
 #include "ui/elided_label.h"
+#include "ui/dialog_settings.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
 
@@ -167,6 +168,7 @@ void NodePane::showDeviceInfo() {
     if (device_.pubkey.size() != 32) return;
 
     QDialog dialog(this);
+    ui::configureDialogWindow(dialog);
     dialog.setWindowTitle(QStringLiteral("Node information"));
 
     auto* form = new QFormLayout;
@@ -237,7 +239,7 @@ void NodePane::showDeviceInfo() {
 
     // Wide enough to keep the complete 32-byte key visible on one line, while
     // remaining comfortably inside the uConsole's 1280-pixel display.
-    dialog.setMinimumWidth(640);
+    ui::lockDialogSize(dialog, *layout, 640);
     dialog.exec();
 }
 

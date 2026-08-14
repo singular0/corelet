@@ -21,6 +21,7 @@
 #include <optional>
 
 #include "protocol/protocol.h"
+#include "ui/dialog_settings.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
 
@@ -92,6 +93,7 @@ bool isZero(const QByteArray& secret) {
 
 AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWidget* parent)
     : QDialog(parent), existing_(existing), freeSlot_(firstFreeSlot(existing)) {
+    ui::configureDialogWindow(*this);
     setWindowTitle(QStringLiteral("Add channel"));
     buildUi();
     regenerateKey();
@@ -233,7 +235,7 @@ void AddChannelDialog::buildUi() {
 
     // Keep a 32-character key on one line without making the dialog too wide
     // for the uConsole.
-    setMinimumWidth(460);
+    ui::lockDialogSize(*this, *layout, 460);
 }
 
 void AddChannelDialog::regenerateKey() {

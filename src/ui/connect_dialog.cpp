@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 
 #include "protocol/ble_transport.h"
+#include "ui/dialog_settings.h"
 #include "ui/theme.h"
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
@@ -37,6 +38,7 @@ constexpr int NameRole = Qt::UserRole + 1;
 }  // namespace
 
 ConnectDialog::ConnectDialog(QWidget* parent) : QDialog(parent) {
+    ui::configureDialogWindow(*this);
     setWindowTitle(QStringLiteral("Connect"));
     saved_ = lastTarget();
     buildUi();
@@ -67,14 +69,8 @@ void ConnectDialog::buildUi() {
     port_->setValidator(new QIntValidator(1, 65535, port_));
     port_->setMaximumWidth(90);
 
-    auto* tcpHint = new QLabel(QStringLiteral(
-        "The companion protocol has no authentication. Point this at loopback,\n"
-        "or at a host on a network you control."));
-    tcpHint->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
-
     tcpLayout->addRow(QStringLiteral("Host"), host_);
     tcpLayout->addRow(QStringLiteral("Port"), port_);
-    tcpLayout->addRow(tcpHint);
 
     // --- bluetooth ----------------------------------------------------------
     auto* bleTab = new QWidget;
@@ -122,7 +118,7 @@ void ConnectDialog::buildUi() {
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     // Wide enough for a BLE name and short enough for the uConsole's 480 rows.
-    setMinimumWidth(420);
+    ui::lockDialogSize(*this, *layout, 420);
 }
 
 // ---------------------------------------------------------------------------

@@ -2,12 +2,12 @@
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QDialog>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
@@ -22,6 +22,7 @@
 #include "ui/add_channel_dialog.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
+#include "ui/dialog_settings.h"
 #include "ui/elided_label.h"
 #include "ui/icons.h"
 #include "ui/message_delegate.h"
@@ -236,22 +237,58 @@ void MainWindow::removeCurrentChannel() {
 
     // The key lives on the device and nowhere else -- the app caches names only
     // -- so this is the last chance to say so.
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(QStringLiteral("Remove channel"));
-    box.setText(QStringLiteral("Remove \"%1\"?").arg(ch->displayName()));
-    box.setInformativeText(
+    QDialog dialog(this);
+    ui::configureDialogWindow(dialog);
+    dialog.setWindowTitle(QStringLiteral("Remove channel"));
+
+    constexpr int RemoveIconSize = 40;
+    auto* icon = new QLabel;
+    icon->setPixmap(icons::tinted(QStringLiteral("trash-2"), RemoveIconSize, theme::Error,
+                                  devicePixelRatioF()));
+    icon->setFixedSize(RemoveIconSize, RemoveIconSize);
+    icon->setAlignment(Qt::AlignTop);
+
+    const QString impactItems =
         ch->type == model::ChannelType::Private
-            ? QStringLiteral("The key is deleted from the device and its messages are removed "
-                             "from this app. Without a copy of the key the channel cannot be "
-                             "joined again.")
-            : QStringLiteral("The channel is deleted from the device and its messages are "
-                             "removed from this app. It can be added again at any time."));
-    QPushButton* confirm = box.addButton(QStringLiteral("Remove"), QMessageBox::DestructiveRole);
-    box.addButton(QMessageBox::Cancel);
-    box.setDefaultButton(QMessageBox::Cancel);
-    box.exec();
-    if (box.clickedButton() != confirm) return;
+            ? QStringLiteral("<li>Channel's key will be deleted the device.</li>"
+                             "<li>Channel's messages history will be deleted from this app.</li>"
+                             "<li>You need a copy of the channel key to rejoin.</li>")
+            : QStringLiteral("<li>Channel's key will be deleted the device.</li>"
+                             "<li>Channel's messages history will be deleted from this app.</li>"
+                             "<li>You can rejoin the channel any time.</li>");
+    auto* content = new QLabel(
+        QStringLiteral("<p style=\"margin: 0;\">Remove <b>%1</b>?</p>"
+                       "<ul style=\"margin-top: 8px; margin-bottom: 0; margin-left: 16px; "
+                       "margin-right: 0; -qt-list-indent: 0; color: %2;\">%3</ul>")
+            .arg(ch->displayName().toHtmlEscaped(), theme::TextMuted.name(), impactItems));
+    content->setTextFormat(Qt::RichText);
+    content->setWordWrap(true);
+    content->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+
+    auto* bodyLayout = new QHBoxLayout;
+    bodyLayout->addWidget(icon, 0, Qt::AlignTop);
+    bodyLayout->addWidget(content, 1, Qt::AlignTop);
+
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"));
+    cancel->setDefault(true);
+    auto* confirm = new QPushButton(QStringLiteral("Remove"));
+
+    auto* buttonLayout = new QHBoxLayout;
+    buttonLayout->setSpacing(6);
+    buttonLayout->addStretch(1);
+    buttonLayout->addWidget(cancel);
+    buttonLayout->addWidget(confirm);
+
+    auto* dialogLayout = new QVBoxLayout(&dialog);
+    dialogLayout->setContentsMargins(20, 16, 20, 16);
+    dialogLayout->setSpacing(12);
+    dialogLayout->addLayout(bodyLayout);
+    dialogLayout->addLayout(buttonLayout);
+    ui::lockDialogSize(dialog, *dialogLayout, 500);
+
+    connect(confirm, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
 
     showNotice(QStringLiteral("Removing %1...").arg(ch->displayName()), 10000);
     pendingChannelRemovals_.insert(ch->index, ch->keyFingerprint());
