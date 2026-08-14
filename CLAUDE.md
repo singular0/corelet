@@ -67,11 +67,11 @@ tag it came from should not claim one. That is why both packaging workflows chec
 `scripts/build-dmg.sh` builds the macOS disk image into `build/dmg/` — never into `build/`, which
 has to keep linking against Homebrew Qt for development — runs `macdeployqt`, ad-hoc signs and
 packages with `hdiutil`. Its version comes from `CMakeLists.txt` alone, so nothing can drift.
-After `macdeployqt` it drops Qt's virtual-keyboard input context and then sweeps `Frameworks/` for
-anything no remaining binary links, which is what keeps the QML runtime and ICU out of a Widgets
-app (94 MB to 37 MB): dropping that one plugin orphans QtQuick and QtQml, which orphans
-QtQmlModels, which orphans ICU. Only `Frameworks/` is swept — plugins are opened by name at
-runtime, so nothing links them and the same test would call every one of them garbage.
+After `macdeployqt` it drops Qt's virtual-keyboard input context and the unusable QtPdf image
+plugin, then sweeps `Frameworks/` for anything no remaining binary links, which is what keeps the
+QML runtime out of a Widgets app: dropping the keyboard plugin orphans QtQuick and QtQml, which in
+turn orphans QtQmlModels. Only `Frameworks/` is swept — plugins are opened by name at runtime, so
+nothing links them and the same test would call every one of them garbage.
 
 Three checks then run, and all three are load-bearing:
 

@@ -98,6 +98,10 @@ build_app() {
 prune_unused() {
     local app=$1 item base refs swept=1
     rm -rf "$app/Contents/PlugIns/platforminputcontexts"
+    # Homebrew builds the PDF image-format plugin even when QtPdf is not
+    # installed. macdeployqt copies the plugin but cannot deploy its framework,
+    # leaving a binary that dyld could never load and this app never uses.
+    rm -f "$app/Contents/PlugIns/imageformats/libqpdf.dylib"
 
     while [ "$swept" -eq 1 ]; do
         swept=0
@@ -114,7 +118,11 @@ prune_unused() {
             # A dylib names itself in its own otool output and a framework's
             # binary names its framework, so the candidate is excluded from the
             # scan or nothing would ever look unreferenced.
-            refs=$(find "$app/Contents" -type f -perm -u+x \
+            # Homebrew installs Qt framework binaries read-only (0444), so an
+            # executable-bit filter silently omits them and makes every
+            # transitive dependency look unused. otool identifies Mach-O files
+            # itself; errors for resources are harmless and discarded.
+            refs=$(find "$app/Contents" -type f \
                 ! -path "$item" ! -path "$item/*" \
                 -exec otool -L {} + 2>/dev/null) || true
             if ! grep -qE "/$base( |/)" <<<"$refs"; then
@@ -141,9 +149,22 @@ check_plugins() {
 # a framework macdeployqt did not know to copy stays an absolute reference into
 # the build machine's Homebrew prefix, and the DMG then runs nowhere else.
 check_self_contained() {
-    local app=$1 leaks
-    leaks=$(find "$app/Contents" -type f -perm -u+x -exec otool -L {} + 2>/dev/null \
-        | grep -E '^[[:space:]]+(/usr/local|/opt/homebrew)/' | sort -u || true)
+    local app=$1 f id ref leaks=
+    while IFS= read -r f; do
+        # A dylib's LC_ID_DYLIB is its own identity, not a file it loads. Some
+        # read-only Homebrew binaries retain an absolute ID after macdeployqt;
+        # dependencies on them are still correctly rewritten into the bundle.
+        id=$(otool -D "$f" 2>/dev/null | sed -n '2p')
+        while IFS= read -r ref; do
+            [ "$ref" = "$id" ] && continue
+            case "$ref" in
+                /usr/local/*|/opt/homebrew/*)
+                    leaks="$leaks  $f: $ref"$'\n'
+                    ;;
+            esac
+        done < <(otool -L "$f" 2>/dev/null \
+            | sed -n '2,$s/^[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    done < <(find "$app/Contents" -type f)
     [ -z "$leaks" ] || die "bundle still links outside itself:
 $leaks"
 }
@@ -153,12 +174,31 @@ $leaks"
 # build error -- it is a dyld failure at launch on the user's machine -- so the
 # sweep is only safe with this run after it.
 check_no_dangling() {
-    local app=$1 ref missing=
-    while IFS= read -r ref; do
-        [ -e "$app/Contents/${ref#@executable_path/../}" ] \
-            || missing="$missing  $ref"$'\n'
-    done < <(find "$app/Contents" -type f -perm -u+x -exec otool -L {} + 2>/dev/null \
-        | sed -n 's|^[[:space:]]*\(@executable_path/[^ ]*\).*|\1|p' | sort -u)
+    local app=$1 f id ref target missing=
+    while IFS= read -r f; do
+        id=$(otool -D "$f" 2>/dev/null | sed -n '2p')
+        while IFS= read -r ref; do
+            [ "$ref" = "$id" ] && continue
+            target=
+            case "$ref" in
+                @executable_path/*)
+                    target="$app/Contents/MacOS/${ref#@executable_path/}"
+                    ;;
+                @loader_path/*)
+                    target="${f%/*}/${ref#@loader_path/}"
+                    ;;
+                @rpath/*)
+                    # macdeployqt puts every non-system rpath dependency in the
+                    # bundle's Frameworks directory.
+                    target="$app/Contents/Frameworks/${ref#@rpath/}"
+                    ;;
+            esac
+            if [ -n "$target" ] && [ ! -e "$target" ]; then
+                missing="$missing  $f: $ref"$'\n'
+            fi
+        done < <(otool -L "$f" 2>/dev/null \
+            | sed -n '2,$s/^[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    done < <(find "$app/Contents" -type f)
     [ -z "$missing" ] || die "bundle references files it does not contain:
 $missing"
 }
