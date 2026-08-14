@@ -88,6 +88,11 @@ void ChannelModel::bumpUnread(int channelIndex) {
     if (row >= 0) Q_EMIT dataChanged(index(row), index(row), {UnreadRole});
 }
 
+int ChannelModel::unreadCount(int channelIndex) const {
+    const QByteArray key = keyForIndex(channelIndex);
+    return key.isEmpty() ? 0 : unread_.value(key, 0);
+}
+
 void ChannelModel::forget(const QByteArray& keyFingerprint) {
     // No dataChanged: this is called after the channel has left the list.
     unread_.remove(keyFingerprint);

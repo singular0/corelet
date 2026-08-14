@@ -614,9 +614,11 @@ void MainWindow::showChannel(int channelIndex) {
     currentChannel_ = channelIndex;
 
     const QByteArray channelKey = currentChannelKey();
+    const int unseenCount = channelModel_->unreadCount(channelIndex);
     chatModel_->setMessages(channelIndex >= 0 && activeDeviceId_.size() == 32
                                 ? history_.messages(activeDeviceId_, channelKey, channelIndex)
-                                : QVector<model::Message>());
+                                : QVector<model::Message>(),
+                            unseenCount);
     channelModel_->clearUnread(channelIndex);
     if (channelIndex >= 0 && !channelKey.isEmpty() && activeDeviceId_.size() == 32) {
         QSettings settings;
@@ -630,10 +632,17 @@ void MainWindow::showChannel(int channelIndex) {
     // Removing acts on the selection, so the button follows it.
     updateChannelActions();
 
-    // Lay out first, then jump to the newest message: scrolling before the
-    // delegate has sized the rows lands in the wrong place.
+    // Lay out first, then show the boundary of anything that arrived while the
+    // channel was closed. With no unseen messages, retain the usual newest-row
+    // anchor. Scrolling before the delegate sizes the rows lands incorrectly.
     messageDelegate_->setViewportWidth(chatView_->viewport()->width());
-    QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
+    QTimer::singleShot(0, this, [this] {
+        const int unseenRow = chatModel_->firstUnseenRow();
+        if (unseenRow >= 0)
+            chatView_->scrollTo(chatModel_->index(unseenRow), QAbstractItemView::PositionAtTop);
+        else
+            chatView_->scrollToBottom();
+    });
 }
 
 QByteArray MainWindow::currentChannelKey() const {
@@ -729,7 +738,9 @@ void MainWindow::appendToView(const model::Message& msg) {
     // yanking the view while they are reading back is worse than a missed jump.
     const bool atBottom = bar->value() >= bar->maximum() - 8;
 
-    chatModel_->append(msg);
+    // An incoming row below the viewport is just as unseen as one received in
+    // another channel. Give it a boundary without treating our own send as new.
+    chatModel_->append(msg, !atBottom && !msg.outgoing);
     if (atBottom) QTimer::singleShot(0, this, [this] { chatView_->scrollToBottom(); });
 }
 

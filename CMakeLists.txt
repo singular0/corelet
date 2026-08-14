@@ -110,4 +110,15 @@ if(BUILD_TESTING)
         target_compile_options(history-test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME history-test COMMAND history-test)
+
+    add_executable(chat-model-test
+        tests/chat_model_test.cpp
+        src/model/chat_model.cpp)
+    target_include_directories(chat-model-test PRIVATE src)
+    target_link_libraries(chat-model-test PRIVATE Qt6::Core)
+    target_compile_definitions(chat-model-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(chat-model-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME chat-model-test COMMAND chat-model-test)
 endif()

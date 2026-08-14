@@ -32,7 +32,8 @@ private:
         QRect header;
         QRect text;
         QRect avatar;     // empty for our own messages, which carry no sender
-        QRect separator;  // empty unless this row starts a new day
+        QRect daySeparator;     // empty unless this row starts a new day
+        QRect unseenSeparator;  // empty unless this is the first unseen row
         QRect mark;       // send state; empty for anything we did not send
     };
 

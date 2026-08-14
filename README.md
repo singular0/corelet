@@ -133,7 +133,8 @@ only visible rows are laid out and painted. A `QTextBrowser` full of HTML would 
 conversation on every message, which is noticeable on a CM4.
 
 Messages anchor to the bottom of the pane. New ones only auto-scroll when you are already at the
-bottom, so reading back is not interrupted by traffic.
+bottom, so reading back is not interrupted by traffic. An accent divider marks the first unseen
+message when returning to a channel, or when new traffic arrives while its view is scrolled back.
 
 A sidebar row is one line: a channel-type icon, the name, when the channel last carried traffic,
 and an unread pill. The stamp is the clock time for today, `dd/MM` for this year and `dd/MM/yy`

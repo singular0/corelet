@@ -47,6 +47,7 @@ public:
     // either — the delegate runs on every paint, this runs once per message.
     void setLastMessage(int channelIndex, const Message& msg);
     void bumpUnread(int channelIndex);
+    int unreadCount(int channelIndex) const;
     void clearUnread(int channelIndex);
     // Drops the transient state held for a channel that has been removed.
     void forget(const QByteArray& keyFingerprint);

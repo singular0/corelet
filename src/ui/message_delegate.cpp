@@ -67,6 +67,22 @@ QColor avatarInk(const QColor& background) {
     return luma > 0.55 ? theme::Background : theme::Text;
 }
 
+void paintSeparator(QPainter* painter, const QRect& rect, const QFont& font,
+                    const QString& label, const QColor& line, const QColor& text) {
+    painter->setFont(font);
+    const QFontMetrics fm(font);
+    const int textW = fm.horizontalAdvance(label);
+    const int cy = rect.center().y();
+    const int gap = 10;
+    const int leftEnd = (rect.width() - textW) / 2 - gap;
+
+    painter->setPen(QPen(line, 1));
+    painter->drawLine(MarginX, cy, leftEnd, cy);
+    painter->drawLine(rect.width() - leftEnd, cy, rect.width() - MarginX, cy);
+    painter->setPen(text);
+    painter->drawText(rect, Qt::AlignCenter, label);
+}
+
 }  // namespace
 
 MessageDelegate::MessageDelegate(QObject* parent) : QStyledItemDelegate(parent) {
@@ -149,6 +165,7 @@ QString MessageDelegate::metaText(const QModelIndex& index, int availableWidth) 
 MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int width) const {
     const bool outgoing = index.data(model::ChatModel::OutgoingRole).toBool();
     const bool dayBreak = index.data(model::ChatModel::DayBreakRole).toBool();
+    const bool unseenBreak = index.data(model::ChatModel::UnseenBreakRole).toBool();
     const QString text = index.data(model::ChatModel::TextRole).toString();
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
 
@@ -182,8 +199,14 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     Layout l;
     int y = 0;
     if (dayBreak) {
-        l.separator = QRect(0, 0, width, SeparatorHeight);
-        y = SeparatorHeight;
+        l.daySeparator = QRect(0, y, width, SeparatorHeight);
+        y += SeparatorHeight;
+    }
+    if (unseenBreak) {
+        // Keep this last when both boundaries coincide, so "New messages" is
+        // immediately adjacent to the first message it describes.
+        l.unseenSeparator = QRect(0, y, width, SeparatorHeight);
+        y += SeparatorHeight;
     }
 
     const int x = outgoing ? width - MarginX - bubbleWidth : MarginX + gutter;
@@ -238,7 +261,7 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     painter->translate(option.rect.topLeft());
     painter->setRenderHint(QPainter::Antialiasing, true);
 
-    if (!l.separator.isNull()) {
+    if (!l.daySeparator.isNull()) {
         const QDateTime ts = index.data(model::ChatModel::TimestampRole).toDateTime();
         const QDate date = ts.date();
         QString label = date.toString(QStringLiteral("d MMMM yyyy"));
@@ -247,19 +270,13 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         else if (date == QDate::currentDate().addDays(-1))
             label = QStringLiteral("Yesterday");
 
-        painter->setFont(separatorFont_);
-        const QFontMetrics fm(separatorFont_);
-        const int textW = fm.horizontalAdvance(label);
-        const int cy = l.separator.center().y();
-        const int gap = 10;
-        const int leftEnd = (l.separator.width() - textW) / 2 - gap;
-
-        painter->setPen(QPen(theme::Border, 1));
-        painter->drawLine(MarginX, cy, leftEnd, cy);
-        painter->drawLine(l.separator.width() - leftEnd, cy, l.separator.width() - MarginX, cy);
-        painter->setPen(theme::TextMuted);
-        painter->drawText(l.separator, Qt::AlignCenter, label);
+        paintSeparator(painter, l.daySeparator, separatorFont_, label, theme::Border,
+                       theme::TextMuted);
     }
+
+    if (!l.unseenSeparator.isNull())
+        paintSeparator(painter, l.unseenSeparator, separatorFont_,
+                       QStringLiteral("New messages"), theme::Accent, theme::Accent);
 
     painter->setPen(Qt::NoPen);
     painter->setBrush(outgoing ? theme::Outgoing : theme::Surface);

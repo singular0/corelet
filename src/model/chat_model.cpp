@@ -24,20 +24,24 @@ QVariant ChatModel::data(const QModelIndex& index, int role) const {
         case DayBreakRole:
             if (index.row() == 0) return true;
             return messages_.at(index.row() - 1).timestamp.date() != m.timestamp.date();
+        case UnseenBreakRole: return index.row() == unseenBreakRow_;
         default: return {};
     }
 }
 
-void ChatModel::setMessages(const QVector<Message>& messages) {
+void ChatModel::setMessages(const QVector<Message>& messages, int unseenCount) {
     beginResetModel();
     messages_ = messages;
+    const int boundedCount = qBound(0, unseenCount, int(messages_.size()));
+    unseenBreakRow_ = boundedCount == 0 ? -1 : int(messages_.size()) - boundedCount;
     endResetModel();
 }
 
-void ChatModel::append(const Message& msg) {
+void ChatModel::append(const Message& msg, bool unseen) {
     const int row = int(messages_.size());
     beginInsertRows({}, row, row);
     messages_.append(msg);
+    if (unseen && unseenBreakRow_ < 0) unseenBreakRow_ = row;
     endInsertRows();
 }
 
