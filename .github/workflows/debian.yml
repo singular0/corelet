@@ -38,8 +38,13 @@ jobs:
     steps:
       # A stock Debian image has no git, and checkout silently falls back to
       # downloading a tarball over the REST API when it cannot find one.
+      # ca-certificates is only a Recommends of git, so --no-install-recommends
+      # leaves the image with no CA bundle at all and the clone dies on "Problem
+      # with the SSL CA cert" -- apt itself is fine, its sources are plain http.
       - name: Install git
-        run: apt-get update -qq && apt-get install -y --no-install-recommends git
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git ca-certificates
 
       # Whole history and every tag: the binary takes its version from git
       # describe, and checkout's default shallow clone has no tag to find, so a
