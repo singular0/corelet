@@ -39,7 +39,12 @@ jobs:
       - name: Install git
         run: apt-get update -qq && apt-get install -y --no-install-recommends git
 
+      # Whole history and every tag: the binary takes its version from git
+      # describe, and checkout's default shallow clone has no tag to find, so a
+      # release would ship packages reporting the previous version number.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install build dependencies
         run: ./scripts/build-deb.sh deps

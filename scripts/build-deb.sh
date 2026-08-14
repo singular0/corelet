@@ -107,6 +107,10 @@ build_container() {
     # The source is mounted read-only and copied inside: dpkg-buildpackage
     # writes into the tree and into its parent, and a macOS build/ directory
     # full of Mach-O objects would confuse the Linux build if it came along.
+    # .git goes with it, so the binary reports project(... VERSION ...) instead
+    # of the tag it was built from -- these builds are one-offs for a machine
+    # that cannot build natively, and the packages a release ships are built by
+    # CI on a real checkout.
     # Past the copy this is the native path, unchanged.
     docker run --rm --platform "linux/$arch" \
         -v "$root:/src:ro" -v "$out:/out" \

@@ -2,6 +2,10 @@
 #include <QCommandLineParser>
 #include <QIcon>
 
+// Generated into the build directory by cmake/version.cmake on every build:
+// the string is git describe's, so it names the tag this was built against.
+#include "version.h"
+
 #include "protocol/ble_transport.h"
 #include "protocol/transport.h"
 #include "ui/connect_dialog.h"

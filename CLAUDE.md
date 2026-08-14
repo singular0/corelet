@@ -51,6 +51,18 @@ kept level with `project(... VERSION ...)` — the script warns when they drift.
 `debian/control` are the single source of dependency truth: `apt-get build-dep` reads them, so no
 list of Qt packages is repeated in the script, the workflow or the README.
 
+Two version numbers with different jobs. `project(... VERSION ...)` and `debian/changelog` version
+the *packages* — the `.deb`'s version, `CFBundleShortVersionString`, the DMG filename, the man page
+— and are hand-bumped, level with each other. What the binary itself reports for `--version` and in
+its title bar is the tag it was built against: `cmake/version.cmake` runs `git describe --tags
+--dirty --match 'v[0-9]*'`, strips the `v` and writes `build/version.h`. That runs on every build
+rather than at configure time, because tagging a commit changes nothing CMake would otherwise
+notice; the header is rewritten only when the string changes, so an unchanged build compiles
+nothing. A checkout with no tag to find — a source tarball, a shallow clone, the container `.deb`
+build that drops `.git` — falls back to `project(... VERSION ...)`. That fallback is why both
+packaging workflows check out with `fetch-depth: 0`: on a default shallow clone every release
+binary would quietly report the number in the tree rather than the tag being released.
+
 `scripts/build-dmg.sh` builds the macOS disk image into `build/dmg/` — never into `build/`, which
 has to keep linking against Homebrew Qt for development — runs `macdeployqt`, ad-hoc signs and
 packages with `hdiutil`. Its version comes from `CMakeLists.txt` alone, so nothing can drift.
