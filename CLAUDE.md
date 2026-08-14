@@ -12,7 +12,8 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 cmake --build build
 
 # uConsole / Debian trixie
-sudo apt install build-essential cmake qt6-base-dev qt6-connectivity-dev qt6-svg-dev
+sudo apt install build-essential cmake qt6-base-dev qt6-connectivity-dev qt6-svg-dev \
+    libqt6sql6-sqlite
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j4
 ```
@@ -34,12 +35,12 @@ outcome and gives feedback. Report what changed and hand it over.
 
 On macOS `QStandardPaths::AppDataLocation` and `QSettings` resolve through Foundation, **not**
 `$HOME`. Launching with `HOME=/scratch` still writes to the real
-`~/Library/Application Support/umeshcore/umeshcore-app/history-v2.jsonl` and
-`~/Library/Preferences/com.umeshcore.umeshcore-app.plist`. That history file is the *only* copy of
-received messages (see below), so a run against a stub daemon destroys real user data.
+`~/Library/Application Support/umeshcore/umeshcore-app/history/<public-key>.sqlite3` and
+`~/Library/Preferences/com.umeshcore.umeshcore-app.plist`. That device database is the *only* copy
+of received messages (see below), so a run against a stub daemon destroys real user data.
 
 Combined with the rule above, there is essentially no reason to run the binary unprompted. If the
-maintainer asks for a run, back up `history-v2.jsonl` first.
+maintainer asks for a run, back up the affected device database first.
 
 ```sh
 ./build/umeshcore-app --host 10.0.0.4 --port 5099   # skips the connect dialog
@@ -52,7 +53,7 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
 
 - **`protocol/`** — wire constants, frame codec, transports, and `CompanionClient`, the state
   machine that owns the link.
-- **`model/`** — `Channel`/`Message` value types, the JSONL `History`, and two `QAbstractListModel`s
+- **`model/`** — `Channel`/`Message` value types, the SQLite `History`, and two `QAbstractListModel`s
   (`ChannelModel` for the sidebar, `ChatModel` for the open conversation).
 - **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, two item delegates,
   the dark `theme`, and SVG icons in a `.qrc`.
@@ -70,7 +71,7 @@ Violating any of these produces bugs that only show up against a real device:
 - **Pushes (code `>= 0x80`) are interleaved** with replies and are routed in `handlePush` before the
   queue is consulted. `PUSH_MSG_WAITING` is what triggers message collection.
 - **`SYNC_NEXT_MESSAGE` pops** from the daemon's inbox. The daemon is not storage; whatever the app
-  collects it must persist to `history-v2.jsonl` or the message is gone. This includes direct messages,
+  collects it must persist to the device database or the message is gone. This includes direct messages,
   which have no view yet but are still stored under channel `-1`.
 - **A channel's slot number is only its current wire address**, never its persistent identity or
   row. `GET_CHANNEL` answers for all 8 slots and unused ones have an all-zero key; slots are sparse,
@@ -91,10 +92,9 @@ Violating any of these produces bugs that only show up against a real device:
 
 ### Persistent state
 
-- `history-v2.jsonl` under `QStandardPaths::AppDataLocation` — append-one-line-per-message, capped
-  at `History::MaxPerChannel` (500) with a whole-file compaction. Every entry is keyed first by the
-  device public key and then by a SHA-256 fingerprint of the channel key. The legacy unscoped
-  `history.jsonl` is left untouched and is not loaded.
+- `history/<public-key>.sqlite3` under `QStandardPaths::AppDataLocation` — one SQLite database per
+  device, capped at `History::MaxPerChannel` (500) messages per channel. Rows are indexed by a
+  SHA-256 fingerprint of the channel key; the device identity is carried by the filename.
 - `QSettings` (org `umeshcore`, app `umeshcore-app`) holds global `geometry`, `splitter` and the
   `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
   below that are keyed by channel-key fingerprint and the selected channel is stored by the same

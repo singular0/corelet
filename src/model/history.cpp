@@ -1,189 +1,222 @@
 #include "model/history.h"
 
-#include <QCryptographicHash>
 #include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QSaveFile>
-#include <QTextStream>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QVariant>
+
+#include <algorithm>
 
 namespace model {
 
 namespace {
 
-// Compact once the file has grown to a few times what we would keep in memory.
-// Doing it on every launch would be pointless work; never doing it lets the
-// file grow without bound on a device with a small SD card.
-constexpr int CompactThreshold = History::MaxPerChannel * 8;
-
-QJsonObject toJson(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
-                   const Message& m) {
-    QJsonObject o;
-    o["device"] = QString::fromLatin1(deviceId.toHex());
-    if (channelKeyFingerprint.isEmpty())
-        o["direct"] = true;
-    else
-        o["channel"] = QString::fromLatin1(channelKeyFingerprint.toHex());
-    o["ts"] = qint64(m.timestamp.toSecsSinceEpoch());
-    o["text"] = m.text;
-    if (!m.sender.isEmpty()) o["from"] = m.sender;
-    if (m.outgoing) o["out"] = true;
-    if (m.hasSignal) {
-        o["snr"] = double(m.snr);
-        o["path"] = m.pathLen;
-    }
-    return o;
+// Qt distinguishes null and non-null empty byte arrays when binding them.
+// History does not: every empty key is the direct-message conversation.
+QVariant storedChannel(const QByteArray& channelKeyFingerprint) {
+    return channelKeyFingerprint.isEmpty() ? QVariant() : QVariant(channelKeyFingerprint);
 }
 
-bool fromJson(const QJsonObject& o, QByteArray& deviceId, QByteArray& channelKeyFingerprint,
-              Message& out) {
-    if (!o.contains("device") || !o.contains("text")) return false;
-    deviceId = QByteArray::fromHex(o["device"].toString().toLatin1());
-    if (deviceId.size() != 32) return false;
-
-    const bool direct = o["direct"].toBool(false);
-    channelKeyFingerprint = QByteArray::fromHex(o["channel"].toString().toLatin1());
-    if (!direct && channelKeyFingerprint.size() != QCryptographicHash::hashLength(
-                                                    QCryptographicHash::Sha256))
-        return false;
-    if (direct) channelKeyFingerprint.clear();
-
-    // A stored channel has no slot. The caller binds it to the slot used by the
-    // current connection; -1 remains the runtime address for direct messages.
-    out.channelIndex = direct ? -1 : 0;
-    out.text = o["text"].toString();
-    out.sender = o["from"].toString();
-    out.outgoing = o["out"].toBool(false);
-    out.timestamp = QDateTime::fromSecsSinceEpoch(qint64(o["ts"].toDouble()));
-    if (o.contains("snr")) {
-        out.hasSignal = true;
-        out.snr = float(o["snr"].toDouble());
-        out.pathLen = o["path"].toInt(0xFF);
+Message storedMessage(const QSqlQuery& query, int channelIndex) {
+    Message msg;
+    msg.channelIndex = channelIndex;
+    msg.timestamp = QDateTime::fromSecsSinceEpoch(query.value(0).toLongLong());
+    msg.text = query.value(1).toString();
+    msg.sender = query.value(2).toString();
+    msg.outgoing = query.value(3).toBool();
+    msg.hasSignal = !query.value(4).isNull();
+    if (msg.hasSignal) {
+        msg.snr = query.value(4).toFloat();
+        msg.pathLen = query.value(5).toInt();
     }
-    return true;
+    return msg;
 }
 
 }  // namespace
 
-History::History(QString path) : path_(std::move(path)) {}
+History::History(QString directory) : directory_(std::move(directory)) {}
 
-void History::load() {
-    QFile f(path_);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;  // first run
-
-    QTextStream in(&f);
-    while (!in.atEnd()) {
-        const QByteArray line = in.readLine().toUtf8();
-        if (line.isEmpty()) continue;
-        linesOnDisk_++;
-
-        QJsonParseError err {};
-        const QJsonDocument doc = QJsonDocument::fromJson(line, &err);
-        if (err.error != QJsonParseError::NoError || !doc.isObject()) continue;
-
-        QByteArray deviceId;
-        QByteArray channelKeyFingerprint;
-        Message m;
-        if (!fromJson(doc.object(), deviceId, channelKeyFingerprint, m)) continue;
-        byDevice_[deviceId][channelKeyFingerprint].append(m);
-    }
-    f.close();
-
-    bool trimmed = false;
-    for (auto device = byDevice_.begin(); device != byDevice_.end(); ++device) {
-        for (auto channel = device->begin(); channel != device->end(); ++channel) {
-            if (channel->size() > MaxPerChannel) {
-                channel->remove(0, channel->size() - MaxPerChannel);
-                trimmed = true;
-            }
+History::~History() {
+    const QList<QString> names = connectionNames_.values();
+    connectionNames_.clear();
+    for (const QString& name : names) {
+        {
+            QSqlDatabase db = QSqlDatabase::database(name, false);
+            if (db.isValid()) db.close();
         }
+        QSqlDatabase::removeDatabase(name);
     }
-    if (trimmed || linesOnDisk_ > CompactThreshold) compact();
 }
 
 QVector<Message> History::messages(const QByteArray& deviceId,
                                    const QByteArray& channelKeyFingerprint,
                                    int channelIndex) const {
-    if (deviceId.size() != 32) return {};
-    if (channelIndex >= 0 && channelKeyFingerprint.size() != 32) return {};
-    if (channelIndex < 0 && !channelKeyFingerprint.isEmpty()) return {};
+    if (!validScope(deviceId, channelKeyFingerprint, channelIndex)) return {};
 
-    const auto device = byDevice_.constFind(deviceId);
-    if (device == byDevice_.constEnd()) return {};
-    const auto channel = device->constFind(channelKeyFingerprint);
-    if (channel == device->constEnd()) return {};
+    const QSqlDatabase db = databaseFor(deviceId);
+    if (!db.isOpen()) return {};
 
-    QVector<Message> result = *channel;
-    for (Message& msg : result) msg.channelIndex = channelIndex;
+    QSqlQuery query(db);
+    query.setForwardOnly(true);
+    if (!query.prepare(QStringLiteral(
+            "SELECT timestamp, text, sender, outgoing, snr, path_len "
+            "FROM messages WHERE channel IS ? ORDER BY id DESC LIMIT ?")))
+        return {};
+    query.addBindValue(storedChannel(channelKeyFingerprint));
+    query.addBindValue(MaxPerChannel);
+    if (!query.exec()) return {};
+
+    QVector<Message> result;
+    result.reserve(MaxPerChannel);
+    while (query.next()) result.append(storedMessage(query, channelIndex));
+
+    // The descending index walk makes LIMIT cheap; the view still consumes
+    // messages in their original append order.
+    std::reverse(result.begin(), result.end());
     return result;
+}
+
+std::optional<Message> History::latestMessage(const QByteArray& deviceId,
+                                              const QByteArray& channelKeyFingerprint,
+                                              int channelIndex) const {
+    if (!validScope(deviceId, channelKeyFingerprint, channelIndex)) return std::nullopt;
+
+    const QSqlDatabase db = databaseFor(deviceId);
+    if (!db.isOpen()) return std::nullopt;
+
+    QSqlQuery query(db);
+    query.setForwardOnly(true);
+    if (!query.prepare(QStringLiteral(
+            "SELECT timestamp, text, sender, outgoing, snr, path_len "
+            "FROM messages WHERE channel IS ? ORDER BY id DESC LIMIT 1")))
+        return std::nullopt;
+    query.addBindValue(storedChannel(channelKeyFingerprint));
+    if (!query.exec() || !query.next()) return std::nullopt;
+    return storedMessage(query, channelIndex);
 }
 
 void History::append(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint,
                      const Message& msg) {
-    if (deviceId.size() != 32) return;
-    if (msg.channelIndex >= 0 &&
-        channelKeyFingerprint.size() !=
-            QCryptographicHash::hashLength(QCryptographicHash::Sha256))
+    if (!validScope(deviceId, channelKeyFingerprint, msg.channelIndex)) return;
+
+    QSqlDatabase db = databaseFor(deviceId);
+    if (!db.isOpen() || !db.transaction()) return;
+
+    QSqlQuery insert(db);
+    if (!insert.prepare(QStringLiteral(
+            "INSERT INTO messages "
+            "(channel, timestamp, text, sender, outgoing, snr, path_len) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"))) {
+        db.rollback();
         return;
-    if (msg.channelIndex < 0 && !channelKeyFingerprint.isEmpty()) return;
+    }
+    insert.addBindValue(storedChannel(channelKeyFingerprint));
+    insert.addBindValue(msg.timestamp.toSecsSinceEpoch());
+    insert.addBindValue(msg.text.isNull() ? QStringLiteral("") : msg.text);
+    insert.addBindValue(msg.sender.isNull() ? QStringLiteral("") : msg.sender);
+    insert.addBindValue(msg.outgoing);
+    insert.addBindValue(msg.hasSignal ? QVariant(double(msg.snr)) : QVariant());
+    insert.addBindValue(msg.hasSignal ? QVariant(msg.pathLen) : QVariant());
+    if (!insert.exec()) {
+        db.rollback();
+        return;
+    }
 
-    Message stored = msg;
-    stored.channelIndex = channelKeyFingerprint.isEmpty() ? -1 : 0;
-    QVector<Message>& msgs = byDevice_[deviceId][channelKeyFingerprint];
-    msgs.append(stored);
-    if (msgs.size() > MaxPerChannel) msgs.remove(0, msgs.size() - MaxPerChannel);
-
-    appendLine(deviceId, channelKeyFingerprint, stored);
-    if (linesOnDisk_ > CompactThreshold) compact();
+    // The channel/id index finds the retention boundary without scanning any
+    // other conversation or rewriting the database.
+    QSqlQuery trim(db);
+    if (!trim.prepare(QStringLiteral(
+            "DELETE FROM messages WHERE channel IS ? AND id < COALESCE(("
+            "SELECT id FROM messages WHERE channel IS ? "
+            "ORDER BY id DESC LIMIT 1 OFFSET ?), 0)"))) {
+        db.rollback();
+        return;
+    }
+    trim.addBindValue(storedChannel(channelKeyFingerprint));
+    trim.addBindValue(storedChannel(channelKeyFingerprint));
+    trim.addBindValue(MaxPerChannel - 1);
+    if (!trim.exec() || !db.commit()) db.rollback();
 }
 
 void History::remove(const QByteArray& deviceId, const QByteArray& channelKeyFingerprint) {
-    if (deviceId.size() != 32 || channelKeyFingerprint.size() != 32) return;
-    auto device = byDevice_.find(deviceId);
-    if (device == byDevice_.end() || device->remove(channelKeyFingerprint) == 0) return;
-    if (device->isEmpty()) byDevice_.erase(device);
-    // Dropping lines is a rewrite whatever way it is done, and compact() already
-    // writes the file from what is in memory.
-    compact();
+    if (deviceId.size() != DeviceIdSize ||
+        channelKeyFingerprint.size() != ChannelFingerprintSize)
+        return;
+
+    const QSqlDatabase db = databaseFor(deviceId);
+    if (!db.isOpen()) return;
+
+    QSqlQuery query(db);
+    if (!query.prepare(QStringLiteral("DELETE FROM messages WHERE channel IS ?"))) return;
+    query.addBindValue(storedChannel(channelKeyFingerprint));
+    query.exec();
 }
 
-void History::appendLine(const QByteArray& deviceId,
-                         const QByteArray& channelKeyFingerprint, const Message& msg) {
-    QDir().mkpath(QFileInfo(path_).absolutePath());
-
-    QFile f(path_);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
-    f.write(QJsonDocument(toJson(deviceId, channelKeyFingerprint, msg))
-                .toJson(QJsonDocument::Compact));
-    f.write("\n");
-    f.close();
-    linesOnDisk_++;
+bool History::validScope(const QByteArray& deviceId,
+                         const QByteArray& channelKeyFingerprint, int channelIndex) {
+    if (deviceId.size() != DeviceIdSize) return false;
+    if (channelIndex < 0) return channelKeyFingerprint.isEmpty();
+    return channelKeyFingerprint.size() == ChannelFingerprintSize;
 }
 
-void History::compact() {
-    // Flat chronological order across devices and channels is not required by
-    // the reader, which buckets by both identities anyway.
-    QDir().mkpath(QFileInfo(path_).absolutePath());
+QSqlDatabase History::databaseFor(const QByteArray& deviceId) const {
+    if (deviceId.size() != DeviceIdSize) return {};
 
-    QSaveFile f(path_);
-    if (!f.open(QIODevice::WriteOnly)) return;
-
-    int written = 0;
-    for (auto device = byDevice_.constBegin(); device != byDevice_.constEnd(); ++device) {
-        for (auto channel = device->constBegin(); channel != device->constEnd(); ++channel) {
-            for (const Message& m : *channel) {
-                f.write(QJsonDocument(toJson(device.key(), channel.key(), m))
-                            .toJson(QJsonDocument::Compact));
-                f.write("\n");
-                written++;
-            }
-        }
+    const auto existing = connectionNames_.constFind(deviceId);
+    if (existing != connectionNames_.constEnd()) {
+        QSqlDatabase db = QSqlDatabase::database(*existing, false);
+        if (db.isValid() && (db.isOpen() || db.open())) return db;
+        return {};
     }
-    // QSaveFile replaces atomically, so a crash mid-compaction leaves the old
-    // history intact rather than a half-written file.
-    if (f.commit()) linesOnDisk_ = written;
+
+    if (!QDir().mkpath(directory_)) return {};
+
+    const QString deviceName = QString::fromLatin1(deviceId.toHex());
+    const QString connectionName =
+        QStringLiteral("umeshcore-history-%1-%2")
+            .arg(quintptr(this), 0, 16)
+            .arg(deviceName);
+    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+    db.setDatabaseName(QDir(directory_).filePath(deviceName + QStringLiteral(".sqlite3")));
+    db.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=5000"));
+    if (!db.open()) {
+        db = {};
+        QSqlDatabase::removeDatabase(connectionName);
+        return {};
+    }
+
+    bool initialized = false;
+    {
+        QSqlQuery query(db);
+        // WAL keeps appends short and leaves readers unblocked if a future UI
+        // reads history off the main thread.
+        initialized = query.exec(QStringLiteral("PRAGMA journal_mode = WAL")) &&
+                      query.exec(QStringLiteral("PRAGMA synchronous = NORMAL")) &&
+                      query.exec(QStringLiteral(
+                          "CREATE TABLE IF NOT EXISTS messages ("
+                          "id INTEGER PRIMARY KEY, "
+                          // NULL is the device's direct-message conversation;
+                          // channel conversations use a 32-byte fingerprint.
+                          "channel BLOB, "
+                          "timestamp INTEGER NOT NULL, "
+                          "text TEXT NOT NULL, "
+                          "sender TEXT NOT NULL DEFAULT '', "
+                          "outgoing INTEGER NOT NULL DEFAULT 0, "
+                          "snr REAL, "
+                          "path_len INTEGER)")) &&
+                      query.exec(QStringLiteral(
+                          "CREATE INDEX IF NOT EXISTS messages_by_channel "
+                          "ON messages(channel, id)"));
+    }
+    if (!initialized) {
+        db.close();
+        db = {};
+        QSqlDatabase::removeDatabase(connectionName);
+        return {};
+    }
+
+    connectionNames_.insert(deviceId, connectionName);
+    return db;
 }
 
 }  // namespace model

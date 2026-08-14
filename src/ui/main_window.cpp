@@ -32,9 +32,9 @@
 
 namespace {
 
-QString historyPath() {
+QString historyDirectory() {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-           QStringLiteral("/history-v2.jsonl");
+           QStringLiteral("/history");
 }
 
 QString deviceSettingsGroup(const QByteArray& deviceId) {
@@ -142,9 +142,8 @@ private:
 }  // namespace
 
 MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
-    : QMainWindow(parent), history_(historyPath()) {
+    : QMainWindow(parent), history_(historyDirectory()) {
     setWindowTitle(QStringLiteral("MeshCore"));
-    history_.load();
 
     client_ = new proto::CompanionClient(this);
     buildUi();
@@ -166,9 +165,8 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     splitter_->restoreState(settings.value(QStringLiteral("splitter")).toByteArray());
-    // These legacy values had no device or channel-key scope and cannot be
-    // assigned safely. Stop carrying them forward; history.jsonl itself stays
-    // untouched as a recoverable legacy file.
+    // These values have no device or channel-key scope and cannot be assigned
+    // safely.
     settings.remove(QStringLiteral("channelCache"));
     settings.remove(QStringLiteral("channel"));
 
@@ -541,9 +539,9 @@ void MainWindow::showChannels(const QVector<model::Channel>& channels) {
     channelModel_->setChannels(channels);
 
     for (const model::Channel& ch : channels) {
-        const QVector<model::Message> msgs =
-            history_.messages(activeDeviceId_, ch.keyFingerprint(), ch.index);
-        if (!msgs.isEmpty()) channelModel_->setLastMessage(ch.index, msgs.last());
+        const std::optional<model::Message> latest =
+            history_.latestMessage(activeDeviceId_, ch.keyFingerprint(), ch.index);
+        if (latest) channelModel_->setLastMessage(ch.index, *latest);
     }
 
     // Selection follows the channel key, not its former wire slot. If that
@@ -716,7 +714,7 @@ void MainWindow::onMessageReceived(const model::Message& msg) {
 void MainWindow::onDirectMessageReceived(const model::Message& msg) {
     // v1 has no DM view, but SYNC_NEXT_MESSAGE already popped this from the
     // daemon's inbox: not writing it down would destroy it. It goes to the same
-    // history file under channel -1, ready for whenever DMs are built out.
+    // device database under channel -1, ready for whenever DMs are built out.
     if (activeDeviceId_.size() != 32) return;
     history_.append(activeDeviceId_, {}, msg);
     directMessageCount_++;

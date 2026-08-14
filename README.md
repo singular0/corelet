@@ -30,13 +30,15 @@ channel to a different slot keeps its history with the channel.
 On the uConsole (Raspberry Pi OS / Debian trixie):
 
 ```sh
-sudo apt install build-essential cmake qt6-base-dev qt6-connectivity-dev qt6-svg-dev
+sudo apt install build-essential cmake qt6-base-dev qt6-connectivity-dev qt6-svg-dev \
+    libqt6sql6-sqlite
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j4
 ```
 
 `qt6-connectivity-dev` is what brings in QtBluetooth; BLE also needs `bluez` running, which it is
-by default. `qt6-svg-dev` is for the sidebar's channel-type icons.
+by default. `qt6-svg-dev` is for the sidebar's channel-type icons, and `libqt6sql6-sqlite` supplies
+the SQLite driver used for message history.
 
 On macOS with Homebrew Qt, point CMake at it:
 
@@ -83,10 +85,11 @@ Worth knowing before changing anything in `src/protocol/`:
 - **Pushes are interleaved.** Codes `>= 0x80` are unsolicited and are routed before the queue is
   consulted. `PUSH_MSG_WAITING` is what drives collection of new messages.
 - **`SYNC_NEXT_MESSAGE` pops.** Collecting a message removes it from the daemon's inbox, so the
-  daemon is not storage — the app appends everything it collects to `history-v2.jsonl` under
-  `QStandardPaths::AppDataLocation`. That file *is* your history; the daemon has no copy.
+  daemon is not storage — the app appends everything it collects to the device's SQLite database
+  under `QStandardPaths::AppDataLocation/history/`. That database *is* your history; the daemon has
+  no copy.
 - **This includes direct messages.** v1 has no DM view, but running this app still drains DMs from
-  the shared inbox. They are written to the same history file under channel `-1` rather than
+  the shared inbox. They are written to the device's database under channel `-1` rather than
   dropped, and the status bar reports when one arrives.
 - **All 8 channel slots always answer.** `GET_CHANNEL` returns an entry for every slot; unused ones
   have an all-zero key, which is how the app tells configured channels apart. Slots are sparse and

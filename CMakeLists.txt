@@ -20,7 +20,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Svg is for the sidebar's channel-type icons: they ship as stroke drawings on a
 # 24x24 grid and are rasterised at whatever size and colour a row needs, which
 # beats carrying a PNG per size, per colour, per screen density.
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network Bluetooth Svg)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network Bluetooth Sql Svg)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -49,7 +49,7 @@ add_executable(umeshcore-app
 
 target_include_directories(umeshcore-app PRIVATE src)
 target_link_libraries(umeshcore-app PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Bluetooth Qt6::Svg)
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Bluetooth Qt6::Sql Qt6::Svg)
 
 target_compile_definitions(umeshcore-app PRIVATE
     UMESHCORE_APP_VERSION="${PROJECT_VERSION}"
@@ -97,3 +97,17 @@ install(FILES assets/umeshcore-app.png
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps)
 
 message(STATUS "umeshcore-app ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(history-test
+        tests/history_test.cpp
+        src/model/history.cpp)
+    target_include_directories(history-test PRIVATE src)
+    target_link_libraries(history-test PRIVATE Qt6::Core Qt6::Sql)
+    target_compile_definitions(history-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(history-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME history-test COMMAND history-test)
+endif()
