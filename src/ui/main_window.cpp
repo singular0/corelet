@@ -143,7 +143,7 @@ private:
 
 MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     : QMainWindow(parent), history_(historyDirectory()) {
-    setWindowTitle(QStringLiteral("MeshCore"));
+    setWindowTitle(QStringLiteral("Corelet"));
 
     client_ = new proto::CompanionClient(this);
     buildUi();
@@ -185,7 +185,7 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     channelModel_->clearTransientState();
     channelModel_->setChannels({});
     chatModel_->setMessages({});
-    setWindowTitle(QStringLiteral("MeshCore"));
+    setWindowTitle(QStringLiteral("Corelet"));
     nodePane_->setDevice({});
     updateHeader();
     updateInputState();
@@ -911,7 +911,7 @@ void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
         updateInputState();
         updateChannelActions();
     }
-    setWindowTitle(info.name.isEmpty() ? QStringLiteral("MeshCore")
-                                       : QStringLiteral("MeshCore — %1").arg(info.name));
+    setWindowTitle(info.name.isEmpty() ? QStringLiteral("Corelet")
+                                       : QStringLiteral("Corelet — %1").arg(info.name));
     nodePane_->setDevice(info);
 }

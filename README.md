@@ -1,4 +1,4 @@
-# corelet
+# Corelet
 
 A MeshCore companion app for the [ClockworkPi uConsole](https://www.clockworkpi.com/uconsole),
 talking to [`umeshcored`](../umeshcore) over the companion protocol on loopback, or straight to a
@@ -48,8 +48,8 @@ cmake --build build
 ```
 
 The Mac build is a bundle — macOS refuses Bluetooth to a process with no usage description, and
-only a bundle has anywhere to declare one — so it runs from `./build/corelet.app/Contents/MacOS/corelet`.
-The uConsole build is a plain binary.
+only a bundle has anywhere to declare one — so it runs from
+`./build/Corelet.app/Contents/MacOS/Corelet`. The uConsole build is a plain binary named `corelet`.
 
 ## Running
 

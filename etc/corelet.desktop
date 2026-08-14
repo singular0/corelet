@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=MeshCore
+Name=Corelet
 GenericName=Mesh Messenger
 Comment=Send and receive MeshCore mesh messages over the AIO v2 LoRa radio
 Exec=corelet

@@ -64,7 +64,7 @@ endif()
 
 # macOS denies Bluetooth to a process with no usage description, and only a
 # bundle has somewhere to declare one. Run it as
-# ./build/corelet.app/Contents/MacOS/corelet.
+# ./build/Corelet.app/Contents/MacOS/Corelet.
 if(APPLE)
     # Qt asks macOS for Bluetooth access through a permission plugin, and that
     # plugin is static: without it linked in, checkPermission() answers Denied
@@ -75,14 +75,21 @@ if(APPLE)
         target_link_libraries(corelet PRIVATE Qt6::QDarwinBluetoothPermissionPlugin)
     endif()
 
-    set(MACOSX_BUNDLE_GUI_IDENTIFIER org.umeshcore.corelet)
-    set(MACOSX_BUNDLE_BUNDLE_NAME corelet)
+    # Reverse-DNS of a domain the author controls. github.io is the usual stand-in
+    # when there is no vanity domain, and it is what Flathub asks for too, so the
+    # same identifier works on both stores if this is ever published.
+    set(MACOSX_BUNDLE_GUI_IDENTIFIER io.github.singular0.corelet)
+    set(MACOSX_BUNDLE_BUNDLE_NAME Corelet)
     set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
     set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
     set_source_files_properties(assets/corelet.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
     target_sources(corelet PRIVATE assets/corelet.icns)
+    # Finder and the menu bar show the bundle name, so the Mac build capitalises
+    # its output. The Linux binary stays lowercase: it is typed and it is what the
+    # desktop file's Exec= names.
     set_target_properties(corelet PROPERTIES
+        OUTPUT_NAME Corelet
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_ICON_FILE corelet.icns
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/etc/Info.plist.in)

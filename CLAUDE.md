@@ -19,7 +19,7 @@ cmake --build build -j4
 ```
 
 The macOS build is a bundle (Bluetooth needs a usage description in `etc/Info.plist.in`), so the
-binary is `./build/corelet.app/Contents/MacOS/corelet`. The uConsole build is a plain binary at
+binary is `./build/Corelet.app/Contents/MacOS/Corelet`. The uConsole build is a plain binary at
 `./build/corelet`.
 
 Sources are listed explicitly in `CMakeLists.txt` — a new `.cpp` must be added there or it silently
