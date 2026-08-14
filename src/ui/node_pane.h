@@ -45,6 +45,7 @@ private:
     QToolButton* infoButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;
     QWidget* batteryRow_ = nullptr;
+    QWidget* statusRow_ = nullptr;
     QLabel* batteryIcon_ = nullptr;
     QLabel* targetIcon_ = nullptr;
     QLabel* statusIndicator_ = nullptr;

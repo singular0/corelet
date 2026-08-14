@@ -140,7 +140,8 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
                      QStringLiteral("server"), &targetIcon_);
     battery_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
                       QStringLiteral("battery-medium"), &batteryIcon_, &batteryRow_);
-    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted, {}, &statusIndicator_);
+    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted, {}, &statusIndicator_,
+                     &statusRow_);
 
     name_->setFullText(QStringLiteral("unavailable"));
     batteryRow_->installEventFilter(this);
@@ -312,6 +313,7 @@ void NodePane::setConnection(const QString& text, const QColor& color, bool acti
 
     statusIndicator_->setPixmap(indicator);
     status_->setFullText(text);
+    statusRow_->setToolTip(text);
     status_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
     connected_ = connected;
     updateBatteryDisplay();
