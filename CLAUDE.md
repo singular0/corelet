@@ -39,6 +39,20 @@ kept level with `project(... VERSION ...)` — the script warns when they drift.
 `debian/control` are the single source of dependency truth: `apt-get build-dep` reads them, so no
 list of Qt packages is repeated in the script, the workflow or the README.
 
+`scripts/build-dmg.sh` builds the macOS disk image into `build/dmg/` — never into `build/`, which
+has to keep linking against Homebrew Qt for development — runs `macdeployqt`, ad-hoc signs and
+packages with `hdiutil`. Its version comes from `CMakeLists.txt` alone, so nothing can drift.
+After `macdeployqt` it drops Qt's virtual-keyboard input context and then sweeps `Frameworks/` for
+anything no remaining binary links, which is what keeps the QML runtime and ICU out of a Widgets
+app (94 MB to 37 MB). Don't remove the sweep's `check_no_dangling` guard: over-pruning surfaces
+only as a dyld failure on a user's machine, never as a build error.
+`.github/workflows/dmg.yml` builds arm64 on `macos-15` and x86-64 on `macos-15-intel`; there is no
+universal binary because a Homebrew Qt is thin, and no `create-dmg` because it positions icons over
+AppleScript, which needs a GUI session a runner does not have. Signing runs after `macdeployqt`
+(which rewrites load commands) and inside-out (a nested binary signed after its container breaks
+the container's seal); don't add `--options runtime`, which only means something under
+notarization.
+
 ## Do not visually verify UI work
 
 After implementing a UI feature, stop at "it compiles". Do not launch the app, render a widget to

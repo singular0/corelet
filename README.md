@@ -94,6 +94,81 @@ The package version is `debian/changelog`'s, and the format is native, so a rele
 entry with the same version as `project(... VERSION ...)` in `CMakeLists.txt`. The script warns if
 the two have drifted.
 
+## macOS disk image
+
+The bundle CMake builds links straight into the Homebrew Qt prefix, so it only runs on the machine
+that built it. `scripts/build-dmg.sh` produces one that doesn't:
+
+```sh
+./scripts/build-dmg.sh deps    # brew install cmake qt
+./scripts/build-dmg.sh
+```
+
+It builds RelWithDebInfo into a tree of its own — the development `build/` keeps pointing at
+Homebrew Qt, which is what you want while working on it — runs the tests, copies the bundle to a
+staging folder, and lets `macdeployqt` pull the frameworks and plugins inside and rewrite the load
+commands.
+
+Then it takes most of that back out. macdeployqt copies plugin directories wholesale, and Qt's only
+input-context plugin is a virtual keyboard that links the entire QML runtime; nothing here types
+into an on-screen keyboard, and this app is Widgets specifically so it never loads QtQuick. Dropping
+that one plugin leaves QtQuick and QtQml unreferenced, dropping those orphans QtQmlModels, and
+dropping the QML stack orphans ICU, which on macOS nothing else uses — so the script sweeps
+`Frameworks/` repeatedly for anything no remaining binary links, which takes the bundle from 94 MB
+to 37 MB and leaves exactly the seven Qt frameworks `target_link_libraries` names. Only
+`Frameworks/` is swept: plugins are opened by name at runtime, so nothing links them and the same
+test would call every one of them garbage.
+
+Three checks then run, in the order that makes the sweep safe to have done at all:
+
+- **Plugins that have to be there.** macdeployqt picks plugins by guessing from the binary's
+  linkage and says nothing when it guesses wrong. Both are loaded by name, so a missing one is not
+  a link error: without `libqcocoa` the app starts with no window, and without `libqsqlite` history
+  fails at runtime with "Driver not loaded".
+- **No reference outside the bundle.** A framework macdeployqt did not know to copy stays an
+  absolute path into the build machine's Homebrew prefix — the failure that shows up only on
+  somebody else's Mac.
+- **No reference the bundle cannot resolve.** The converse, and what keeps the sweep honest:
+  over-pruning cannot show up as a build error, only as a dyld failure at launch on a user's
+  machine.
+
+The disk image is built by `hdiutil` from a staging folder holding the app beside a symlink to
+`/Applications`, which is the drag-to-install layout with no dependency past what macOS ships.
+`create-dmg` would give a nicer window, but it positions icons over AppleScript, which needs a
+logged-in GUI session and so fails on a CI runner.
+
+There is no universal binary. A Homebrew Qt is thin, so one would mean `lipo`-ing a tree of
+frameworks by hand or switching to the official Qt installer; `.github/workflows/dmg.yml` builds
+each architecture on a runner of that architecture instead, exactly as the Debian packages are
+built. Both runners are macOS 15 so the two share a deployment target — which also means the DMGs
+want macOS 15 or newer, since the bundled Qt is a Homebrew bottle built for that release.
+`macos-15-intel` is the last x86-64 image GitHub will offer, and it goes away in August 2027. On a
+tag the workflow opens a draft release with both DMGs attached.
+
+### Ad-hoc signing
+
+The bundle is signed, but with an ad-hoc signature rather than a Developer ID. That is the floor,
+not a nicety: Apple Silicon refuses to execute a Mach-O carrying no signature at all. Signing runs
+after `macdeployqt`, which rewrites load commands and would invalidate a seal applied first, and
+inside-out, because signing a nested binary after its container breaks the container's signature.
+The hardened runtime is deliberately not enabled — it is what notarization requires, and on an
+ad-hoc signature it only adds restrictions.
+
+What ad-hoc does not do is satisfy Gatekeeper. A downloaded DMG is quarantined, and since macOS 15
+the Control-click → Open bypass no longer works, so the app has to be allowed once from
+**System Settings → Privacy & Security → Open Anyway**, or:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Corelet.app
+```
+
+Two consequences worth knowing. macOS keys the Bluetooth permission to the bundle's code identity,
+and an ad-hoc signature is a fresh identity on every build, so the BLE prompt can reappear after an
+update or stick in a denied state — deleting the entry under Privacy & Security → Bluetooth clears
+it. And a Homebrew cask would not help: casks quarantine by default. Both go away with a paid
+Developer ID, which turns the extra steps into `codesign --options runtime -s "Developer ID
+Application: ..."`, `xcrun notarytool submit --wait` and `xcrun stapler staple`.
+
 ## Running
 
 Started with no arguments, the app asks what to connect to: a host and port, or a device picked

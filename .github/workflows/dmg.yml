@@ -1,0 +1,72 @@
+name: dmg
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Same shape as deb.yml and for the same reason: each architecture builds on
+  # a runner of its own architecture. A Homebrew Qt is thin, so there is no
+  # universal bundle to produce from one job, and lipo-ing a tree of frameworks
+  # by hand to fake one is not worth two DMGs.
+  #
+  # Both images are macOS 15 so the two builds share a deployment target.
+  # macos-15-intel is the last x86-64 image GitHub will offer -- it goes away
+  # in August 2027, and with it the Intel DMG.
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: ./scripts/build-dmg.sh deps
+
+      - name: Build disk image
+        run: ./scripts/build-dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corelet-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  # Tags only, and only once both architectures are packaged: a release with
+  # half its assets is worse than one that arrives a minute later.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: corelet-macos-*
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          draft: true
+          body: |
+            The macOS builds are ad-hoc signed, not notarized, so Gatekeeper
+            refuses them on first launch. Open the app once from System
+            Settings > Privacy & Security > Open Anyway, or run
+
+                xattr -dr com.apple.quarantine /Applications/Corelet.app
