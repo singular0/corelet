@@ -209,10 +209,26 @@ void BleTransport::openService() {
             });
     connect(service_, &QLowEnergyService::errorOccurred, this,
             [this](QLowEnergyService::ServiceError error) {
+                // Reading values is optional for this transport. CoreBluetooth
+                // can still finish discovery after a write-only characteristic
+                // or CCCD rejects the eager read made by FullDiscovery.
+                const bool unusedReadFailed =
+                    error == QLowEnergyService::CharacteristicReadError ||
+                    error == QLowEnergyService::DescriptorReadError;
+                if (unusedReadFailed &&
+                    service_->state() == QLowEnergyService::RemoteServiceDiscovering)
+                    return;
                 if (error != QLowEnergyService::NoError) fail(serviceErrorText(error));
             });
 
+#ifdef Q_OS_LINUX
+    // We only need UUIDs, properties and descriptors. FullDiscovery also reads
+    // every value; under BlueZ a rejected CCCD read can leave Qt's service in
+    // RemoteServiceDiscovering forever, even though all metadata is available.
+    service_->discoverDetails(QLowEnergyService::SkipValueDiscovery);
+#else
     service_->discoverDetails();
+#endif
 }
 
 void BleTransport::subscribe() {

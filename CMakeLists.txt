@@ -124,6 +124,14 @@ if(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_ICON_FILE corelet.icns
         MACOSX_BUNDLE_INFO_PLIST ${CORELET_INFO_PLIST})
+
+    # A plain Makefiles build does not sign bundles as Xcode does. Besides being
+    # required to launch on Apple Silicon, a signed bundle identity is what lets
+    # macOS associate the Bluetooth grant with Corelet during development.
+    add_custom_command(TARGET corelet POST_BUILD
+        COMMAND /usr/bin/codesign --force --sign - $<TARGET_BUNDLE_DIR:corelet>
+        COMMENT "Ad-hoc signing Corelet"
+        VERBATIM)
 endif()
 
 include(GNUInstallDirs)
