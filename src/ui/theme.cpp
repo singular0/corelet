@@ -1,6 +1,7 @@
 #include "ui/theme.h"
 
 #include <QApplication>
+#include <QFontDatabase>
 #include <QPalette>
 #include <QString>
 
@@ -22,6 +23,9 @@ QColor senderColor(const QString& name) {
 
 void apply(QApplication& app) {
     app.setStyle(QStringLiteral("Fusion"));
+    // Fusion supplies the widget chrome, but its defaults must not replace the
+    // font chosen in the desktop theme (especially on the uConsole).
+    app.setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
 
     QPalette p;
     p.setColor(QPalette::Window, Background);
