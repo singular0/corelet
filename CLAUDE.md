@@ -35,8 +35,8 @@ outcome and gives feedback. Report what changed and hand it over.
 
 On macOS `QStandardPaths::AppDataLocation` and `QSettings` resolve through Foundation, **not**
 `$HOME`. Launching with `HOME=/scratch` still writes to the real
-`~/Library/Application Support/umeshcore/corelet/history/<public-key>.sqlite3` and
-`~/Library/Preferences/com.umeshcore.corelet.plist`. That device database is the *only* copy of
+`~/Library/Application Support/singular0/corelet/history/<public-key>.sqlite3` and
+`~/Library/Preferences/com.singular0.corelet.plist`. That device database is the *only* copy of
 received messages (see below), so a run against a stub daemon destroys real user data.
 
 Combined with the rule above, there is essentially no reason to run the binary unprompted. If the
@@ -95,7 +95,7 @@ Violating any of these produces bugs that only show up against a real device:
 - `history/<public-key>.sqlite3` under `QStandardPaths::AppDataLocation` — one SQLite database per
   device, capped at `History::MaxPerChannel` (500) messages per channel. Rows are indexed by a
   SHA-256 fingerprint of the channel key; the device identity is carried by the filename.
-- `QSettings` (org `umeshcore`, app `corelet`) holds global `geometry`, `splitter` and the
+- `QSettings` (org `singular0`, app `corelet`) holds global `geometry`, `splitter` and the
   `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
   below that are keyed by channel-key fingerprint and the selected channel is stored by the same
   fingerprint. The secret channel keys stay in the daemon.

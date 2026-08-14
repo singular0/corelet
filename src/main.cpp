@@ -11,14 +11,18 @@
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("corelet"));
-    QApplication::setOrganizationName(QStringLiteral("umeshcore"));
+    // There is no organization, but leaving this unset is not an option: Qt files
+    // the settings under com.trolltech.unknown-organization rather than skipping
+    // the level. The author's handle is the honest answer and keeps the settings
+    // domain in step with the bundle identifier in CMakeLists.txt.
+    QApplication::setOrganizationName(QStringLiteral("singular0"));
     QApplication::setApplicationVersion(QStringLiteral(CORELET_VERSION));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
         QStringLiteral("MeshCore companion app for the ClockworkPi uConsole.\n"
-                       "Talks to a local umeshcored over the companion protocol, or\n"
+                       "Talks to a MeshCore daemon over the companion protocol, or\n"
                        "to a MeshCore device over Bluetooth LE."));
     parser.addHelpOption();
     parser.addVersionOption();
@@ -26,10 +30,10 @@ int main(int argc, char** argv) {
     // The daemon binds loopback by default, and its protocol has no
     // authentication, so a local default is the only safe one.
     QCommandLineOption hostOption({QStringLiteral("H"), QStringLiteral("host")},
-                                  QStringLiteral("umeshcored host (default 127.0.0.1)"),
+                                  QStringLiteral("MeshCore daemon host (default 127.0.0.1)"),
                                   QStringLiteral("host"), QStringLiteral("127.0.0.1"));
     QCommandLineOption portOption({QStringLiteral("p"), QStringLiteral("port")},
-                                  QStringLiteral("companion port (default 5000)"),
+                                  QStringLiteral("MeshCore daemon port (default 5000)"),
                                   QStringLiteral("port"), QStringLiteral("5000"));
     QCommandLineOption bleOption(
         {QStringLiteral("b"), QStringLiteral("ble")},
