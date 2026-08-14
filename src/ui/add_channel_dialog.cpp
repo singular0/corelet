@@ -123,20 +123,20 @@ void AddChannelDialog::buildUi() {
     createKey_->setReadOnly(true);
     createKey_->setFont(mono);
 
-    constexpr int KeyActionIconSize = 16;
+    const int keyActionIconSize = theme::scaled(font(), 16);
     QIcon regenerateIcon;
     regenerateIcon.addPixmap(
-        icons::tinted(QStringLiteral("refresh-cw"), KeyActionIconSize, theme::TextMuted, dpr),
+        icons::tinted(QStringLiteral("refresh-cw"), keyActionIconSize, theme::TextMuted, dpr),
         QIcon::Normal);
     regenerateIcon.addPixmap(
-        icons::tinted(QStringLiteral("refresh-cw"), KeyActionIconSize, theme::Text, dpr),
+        icons::tinted(QStringLiteral("refresh-cw"), keyActionIconSize, theme::Text, dpr),
         QIcon::Active);
     QIcon copyIcon;
     copyIcon.addPixmap(
-        icons::tinted(QStringLiteral("copy"), KeyActionIconSize, theme::TextMuted, dpr),
+        icons::tinted(QStringLiteral("copy"), keyActionIconSize, theme::TextMuted, dpr),
         QIcon::Normal);
     copyIcon.addPixmap(
-        icons::tinted(QStringLiteral("copy"), KeyActionIconSize, theme::Text, dpr),
+        icons::tinted(QStringLiteral("copy"), keyActionIconSize, theme::Text, dpr),
         QIcon::Active);
 
     QAction* copy = createKey_->addAction(copyIcon, QLineEdit::TrailingPosition);

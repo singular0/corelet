@@ -34,14 +34,6 @@ QString iconName(model::ChannelType type) {
     return QStringLiteral("lock");
 }
 
-// The second line and the stamp sit a step below the name, which is what keeps
-// the name the thing the eye lands on.
-QFont subFont(const QFont& base) {
-    QFont f = base;
-    f.setPointSizeF(qMax(6.5, base.pointSizeF() - 1.5));
-    return f;
-}
-
 QFont nameFont(const QFont& base) {
     QFont f = base;
     f.setBold(true);
@@ -52,8 +44,8 @@ QFont nameFont(const QFont& base) {
 
 QSize ChannelDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const {
     const int text = QFontMetrics(nameFont(option.font)).height() + LineGap +
-                     QFontMetrics(subFont(option.font)).height();
-    return QSize(0, qMax(text, IconSize) + 2 * VerticalPadding);
+                     QFontMetrics(theme::secondaryFont(option.font)).height();
+    return QSize(0, qMax(text, theme::scaled(option.font, IconSize)) + 2 * VerticalPadding);
 }
 
 void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
@@ -79,17 +71,19 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
                              : unread > 0 ? theme::Accent
                                           : theme::TextMuted;
     const qreal dpr = option.widget ? option.widget->devicePixelRatioF() : 1.0;
-    const QRect iconRect(r.left(), r.top() + (r.height() - IconSize) / 2, IconSize, IconSize);
+    const int iconSize = theme::scaled(option.font, IconSize);
+    const int glyphInset = theme::scaled(option.font, GlyphInset);
+    const QRect iconRect(r.left(), r.top() + (r.height() - iconSize) / 2, iconSize, iconSize);
     p->setPen(Qt::NoPen);
     p->setBrush(theme::IconBackground);
     p->drawEllipse(iconRect);
     const QRect glyphRect =
-        iconRect.adjusted(GlyphInset, GlyphInset, -GlyphInset, -GlyphInset);
+        iconRect.adjusted(glyphInset, glyphInset, -glyphInset, -glyphInset);
     p->drawPixmap(glyphRect, icons::tinted(iconName(type), glyphRect.width(), iconColor, dpr));
     r.setLeft(iconRect.right() + 10);
 
     const QFont nameF = nameFont(option.font);
-    const QFont subF = subFont(option.font);
+    const QFont subF = theme::secondaryFont(option.font);
     const QFontMetrics nameFm(nameF);
     const QFontMetrics subFm(subF);
 

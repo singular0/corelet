@@ -55,5 +55,11 @@ private:
     QFont bodyFont_;
     QFont separatorFont_;
     QFont avatarFont_;
+    int avatarSize_ = 30;
+    int avatarGap_ = 8;
+    int markSize_ = 8;
+    int markGap_ = 5;
+    int markAllowance_ = 13;
+    qreal markPenWidth_ = 1.4;
     mutable QHash<QString, QString> avatarGlyphs_;
 };

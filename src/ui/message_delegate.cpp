@@ -30,7 +30,6 @@ constexpr int AvatarGap = 8;
 // a relayout.
 constexpr int MarkSize = 8;
 constexpr int MarkGap = 5;
-constexpr int MarkAllowance = MarkSize + MarkGap;
 
 // Bubbles stop well short of the full width so that the left/right alignment
 // stays readable as "who said this", and so long lines do not run the whole
@@ -87,11 +86,16 @@ void paintSeparator(QPainter* painter, const QRect& rect, const QFont& font,
 
 MessageDelegate::MessageDelegate(QObject* parent) : QStyledItemDelegate(parent) {
     bodyFont_ = QApplication::font();
-    headerFont_ = bodyFont_;
-    headerFont_.setPointSizeF(qMax(6.5, bodyFont_.pointSizeF() - 1.5));
+    headerFont_ = theme::secondaryFont(bodyFont_);
     separatorFont_ = headerFont_;
     avatarFont_ = bodyFont_;
     avatarFont_.setBold(true);
+    avatarSize_ = theme::scaled(bodyFont_, AvatarSize);
+    avatarGap_ = theme::scaled(bodyFont_, AvatarGap);
+    markSize_ = theme::scaled(bodyFont_, MarkSize);
+    markGap_ = theme::scaled(bodyFont_, MarkGap);
+    markAllowance_ = markSize_ + markGap_;
+    markPenWidth_ *= qreal(markSize_) / MarkSize;
 }
 
 QString MessageDelegate::avatarGlyph(const QString& sender) const {
@@ -172,7 +176,7 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     // Our own messages carry no sender name -- there is nobody to draw -- so the
     // gutter only opens on the incoming side.
     const bool hasAvatar = !outgoing && !sender.isEmpty();
-    const int gutter = hasAvatar ? AvatarSize + AvatarGap : 0;
+    const int gutter = hasAvatar ? avatarSize_ + avatarGap_ : 0;
 
     const int maxBubble = bubbleMaxWidth(width - gutter);
     const int maxContent = maxBubble - 2 * PadX;
@@ -183,7 +187,7 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     QRect textBounds =
         bodyFm.boundingRect(QRect(0, 0, maxContent, 0), Qt::TextWordWrap, text);
 
-    const int markAllowance = outgoing ? MarkAllowance : 0;
+    const int markAllowance = outgoing ? markAllowance_ : 0;
     const QString name = outgoing ? QString() : sender;
     const QString meta = metaText(index, maxContent - markAllowance);
     // The header is sender on the left and metadata on the right, on one line,
@@ -214,12 +218,12 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     // Top-aligned rather than centred: it belongs with the name on the header
     // line, and a long message would otherwise float it into the middle of the
     // text.
-    if (hasAvatar) l.avatar = QRect(MarginX, y, AvatarSize, AvatarSize);
+    if (hasAvatar) l.avatar = QRect(MarginX, y, avatarSize_, avatarSize_);
     l.header = QRect(x + PadX, y + PadY, bubbleWidth - 2 * PadX, headerHeight);
     if (outgoing) {
         const int metaWidth = headerFm.horizontalAdvance(meta);
-        l.mark = QRect(l.header.right() + 1 - metaWidth - MarkGap - MarkSize,
-                       l.header.y() + (headerHeight - MarkSize) / 2, MarkSize, MarkSize);
+        l.mark = QRect(l.header.right() + 1 - metaWidth - markGap_ - markSize_,
+                       l.header.y() + (headerHeight - markSize_) / 2, markSize_, markSize_);
     }
     l.text = QRect(x + PadX, l.header.bottom() + 1 + HeaderGap, bubbleWidth - 2 * PadX,
                    textBounds.height());
@@ -227,7 +231,7 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
 }
 
 void MessageDelegate::paintMark(QPainter* painter, const QRect& mark, bool pending) const {
-    QPen pen(pending ? theme::TextMuted : theme::Accent, 1.4);
+    QPen pen(pending ? theme::TextMuted : theme::Accent, markPenWidth_);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
     painter->setPen(pen);
@@ -285,7 +289,7 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
     // The mark is drawn separately because the target system font may not have
     // a tick glyph; the dot and timestamp remain ordinary right-aligned text.
-    const int markAllowance = l.mark.isNull() ? 0 : MarkAllowance;
+    const int markAllowance = l.mark.isNull() ? 0 : markAllowance_;
     const QString meta = metaText(index, l.header.width() - markAllowance);
 
     if (!l.avatar.isNull()) {

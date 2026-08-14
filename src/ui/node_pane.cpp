@@ -26,16 +26,8 @@ namespace {
 
 constexpr int RowIconSize = 14;
 
-// Everything but the node's own name is a footnote to the channel list above
-// it, and sits a step below the body font — the same step the sidebar rows use.
-QFont subFont(const QFont& base) {
-    QFont f = base;
-    f.setPointSizeF(qMax(6.5, base.pointSizeF() - 1.5));
-    return f;
-}
-
 ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
-                    const QString& iconName = {}, QLabel** iconOut = nullptr,
+                    int iconSize, const QString& iconName = {}, QLabel** iconOut = nullptr,
                     QWidget** rowOut = nullptr) {
     auto* row = new QWidget;
     auto* rowLayout = new QHBoxLayout(row);
@@ -46,9 +38,9 @@ ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
     // changes independently of the text, but both stay aligned with the rows
     // above it.
     auto* icon = new QLabel;
-    icon->setFixedSize(RowIconSize, RowIconSize);
+    icon->setFixedSize(iconSize, iconSize);
     if (!iconName.isEmpty())
-        icon->setPixmap(icons::tinted(iconName, RowIconSize, theme::TextMuted,
+        icon->setPixmap(icons::tinted(iconName, iconSize, theme::TextMuted,
                                      layout->parentWidget()->devicePixelRatioF()));
     icon->setAlignment(Qt::AlignCenter);
     rowLayout->addWidget(icon);
@@ -73,6 +65,7 @@ ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
 
 NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("nodePane"));
+    iconSize_ = theme::scaled(font(), RowIconSize);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -87,8 +80,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     headerLayout->setSpacing(4);
 
     auto* title = new QLabel(QStringLiteral("NODE"));
-    QFont headerFont = title->font();
-    headerFont.setPointSizeF(qMax(6.5, headerFont.pointSizeF() - 1.5));
+    QFont headerFont = theme::secondaryFont(title->font());
     headerFont.setBold(true);
     headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
     title->setFont(headerFont);
@@ -96,20 +88,20 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
 
     infoButton_ = new QToolButton;
     infoButton_->setObjectName(QStringLiteral("iconButton"));
-    infoButton_->setIconSize(QSize(14, 14));
+    infoButton_->setIconSize(QSize(iconSize_, iconSize_));
     infoButton_->setAutoRaise(true);
     infoButton_->setCursor(Qt::PointingHandCursor);
     infoButton_->setFocusPolicy(Qt::NoFocus);
     infoButton_->setText(QStringLiteral("Node information"));
     infoButton_->setToolTip(QStringLiteral("Node information"));
     QIcon infoIcon;
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::TextMuted,
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::TextMuted,
                                     devicePixelRatioF()),
                        QIcon::Normal);
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::Accent,
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::Accent,
                                     devicePixelRatioF()),
                        QIcon::Active);
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), 14, theme::Border,
+    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::Border,
                                     devicePixelRatioF()),
                        QIcon::Disabled);
     infoButton_->setIcon(infoIcon);
@@ -117,7 +109,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
 
     connectionButton_ = new QToolButton;
     connectionButton_->setObjectName(QStringLiteral("iconButton"));
-    connectionButton_->setIconSize(QSize(14, 14));
+    connectionButton_->setIconSize(QSize(iconSize_, iconSize_));
     connectionButton_->setAutoRaise(true);
     connectionButton_->setCursor(Qt::PointingHandCursor);
     connectionButton_->setFocusPolicy(Qt::NoFocus);
@@ -135,13 +127,15 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     QFont nameFont = font();
     nameFont.setBold(true);
 
-    name_ = addRow(detailsLayout, nameFont, theme::Text, QStringLiteral("radio-tower"));
-    target_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
+    name_ = addRow(detailsLayout, nameFont, theme::Text, iconSize_,
+                   QStringLiteral("radio-tower"));
+    const QFont detailsFont = theme::secondaryFont(font());
+    target_ = addRow(detailsLayout, detailsFont, theme::TextMuted, iconSize_,
                      QStringLiteral("server"), &targetIcon_);
-    battery_ = addRow(detailsLayout, subFont(font()), theme::TextMuted,
+    battery_ = addRow(detailsLayout, detailsFont, theme::TextMuted, iconSize_,
                       QStringLiteral("battery-medium"), &batteryIcon_, &batteryRow_);
-    status_ = addRow(detailsLayout, subFont(font()), theme::TextMuted, {}, &statusIndicator_,
-                     &statusRow_);
+    status_ = addRow(detailsLayout, detailsFont, theme::TextMuted, iconSize_, {},
+                     &statusIndicator_, &statusRow_);
 
     name_->setFullText(QStringLiteral("unavailable"));
     batteryRow_->installEventFilter(this);
@@ -160,13 +154,12 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
 }
 
 void NodePane::setTarget(const proto::ConnectTarget& target) {
-    constexpr int IconSize = 14;
     target_->setFullText(target.label());
     const QString icon = target.kind == proto::ConnectTarget::Kind::Ble
                              ? QStringLiteral("bluetooth")
                              : QStringLiteral("server");
     targetIcon_->setPixmap(
-        icons::tinted(icon, IconSize, theme::TextMuted, devicePixelRatioF()));
+        icons::tinted(icon, iconSize_, theme::TextMuted, devicePixelRatioF()));
 }
 
 void NodePane::setDevice(const proto::CompanionClient::DeviceInfo& info) {
@@ -200,7 +193,7 @@ void NodePane::updateBatteryDisplay() {
         tint = theme::Warning;
     battery_->setStyleSheet(QStringLiteral("color: %1;").arg(tint.name()));
     batteryIcon_->setPixmap(
-        icons::tinted(QStringLiteral("battery-medium"), RowIconSize, tint, devicePixelRatioF()));
+        icons::tinted(QStringLiteral("battery-medium"), iconSize_, tint, devicePixelRatioF()));
 
     if (!available) {
         battery_->setFullText(QStringLiteral("unavailable"));
@@ -245,12 +238,12 @@ void NodePane::showDeviceInfo() {
     publicKey->setReadOnly(true);
     publicKey->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     publicKey->setCursorPosition(0);
-    constexpr int CopyIconSize = 16;
+    const int copyIconSize = theme::scaled(font(), 16);
     QIcon copyIcon;
-    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::TextMuted,
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), copyIconSize, theme::TextMuted,
                                     devicePixelRatioF()),
                        QIcon::Normal);
-    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::Text,
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), copyIconSize, theme::Text,
                                     devicePixelRatioF()),
                        QIcon::Active);
     QAction* copy = publicKey->addAction(copyIcon, QLineEdit::TrailingPosition);
@@ -301,14 +294,16 @@ void NodePane::showDeviceInfo() {
 
 void NodePane::setConnection(const QString& text, const QColor& color, bool active,
                              bool connected) {
-    QPixmap indicator(QSize(RowIconSize, RowIconSize) * devicePixelRatioF());
+    QPixmap indicator(QSize(iconSize_, iconSize_) * devicePixelRatioF());
     indicator.setDevicePixelRatio(devicePixelRatioF());
     indicator.fill(Qt::transparent);
     QPainter painter(&indicator);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
     painter.setBrush(color);
-    painter.drawEllipse(QRectF(3, 3, 8, 8));
+    const int dotSize = theme::scaled(font(), 8);
+    const qreal dotInset = (iconSize_ - dotSize) / 2.0;
+    painter.drawEllipse(QRectF(dotInset, dotInset, dotSize, dotSize));
     painter.end();
 
     statusIndicator_->setPixmap(indicator);
@@ -324,15 +319,14 @@ void NodePane::setConnection(const QString& text, const QColor& color, bool acti
 }
 
 void NodePane::updateConnectionAction(bool active) {
-    constexpr int IconSize = 14;
     const QString action = active ? QStringLiteral("Disconnect") : QStringLiteral("Connect");
     const QString iconName = active ? QStringLiteral("unplug") : QStringLiteral("plug");
     const QColor hover = active ? theme::Error : theme::Accent;
 
     QIcon icon;
-    icon.addPixmap(icons::tinted(iconName, IconSize, theme::TextMuted, devicePixelRatioF()),
+    icon.addPixmap(icons::tinted(iconName, iconSize_, theme::TextMuted, devicePixelRatioF()),
                    QIcon::Normal);
-    icon.addPixmap(icons::tinted(iconName, IconSize, hover, devicePixelRatioF()), QIcon::Active);
+    icon.addPixmap(icons::tinted(iconName, iconSize_, hover, devicePixelRatioF()), QIcon::Active);
     connectionButton_->setIcon(icon);
     connectionButton_->setText(action);
     connectionButton_->setToolTip(active ? QStringLiteral("Disconnect from this node")

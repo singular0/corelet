@@ -54,6 +54,7 @@ private:
     ElidedLabel* battery_ = nullptr;
     ElidedLabel* status_ = nullptr;
     proto::CompanionClient::DeviceInfo device_;
+    int iconSize_ = 14;
     bool connectionActive_ = false;
     bool connected_ = false;
     bool showBatteryVoltage_ = false;

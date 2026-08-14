@@ -30,6 +30,15 @@ inline const QColor Error {0xe0, 0x6c, 0x6c};
 // identifies them.
 QColor senderColor(const QString& name);
 
+// The compact labels used for section headings and metadata stay one visual
+// step below the body while preserving whether the desktop supplied its font
+// in points or pixels.
+QFont secondaryFont(const QFont& base);
+
+// Fixed artwork was drawn around a 16-pixel body-font line. Keep those sizes
+// as the compact floor, then grow them with a larger configured desktop font.
+int scaled(const QFont& font, int pixels);
+
 void apply(QApplication& app);
 
 }  // namespace theme

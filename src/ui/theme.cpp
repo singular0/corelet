@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QPalette>
 #include <QString>
 
@@ -19,6 +20,22 @@ QColor senderColor(const QString& name) {
     uint h = 2166136261u;
     for (const QChar c : name) h = (h ^ c.unicode()) * 16777619u;
     return palette[h % (sizeof(palette) / sizeof(palette[0]))];
+}
+
+QFont secondaryFont(const QFont& base) {
+    constexpr qreal Scale = 0.85;
+    QFont font = base;
+    if (base.pointSizeF() > 0.0)
+        font.setPointSizeF(qMax(6.5, base.pointSizeF() * Scale));
+    else if (base.pixelSize() > 0)
+        font.setPixelSize(qMax(9, qRound(base.pixelSize() * Scale)));
+    return font;
+}
+
+int scaled(const QFont& font, int pixels) {
+    constexpr int BaselineFontHeight = 16;
+    const int fontHeight = QFontMetrics(font).height();
+    return qMax(pixels, qRound(pixels * qreal(fontHeight) / BaselineFontHeight));
 }
 
 void apply(QApplication& app) {

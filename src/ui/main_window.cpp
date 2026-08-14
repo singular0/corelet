@@ -61,17 +61,16 @@ bool isRemovable(const model::Channel& ch) {
 // QIcon picks the mode itself, which is cheaper than restyling the button on
 // hover and enable changes. `hover` is what the action means -- the accent for
 // adding, the error colour for anything that takes something away.
-QToolButton* headerButton(const QString& icon, const QColor& hover, qreal dpr) {
-    constexpr int IconSize = 14;
+QToolButton* headerButton(const QString& icon, const QColor& hover, int iconSize, qreal dpr) {
     QIcon set;
-    set.addPixmap(icons::tinted(icon, IconSize, theme::TextMuted, dpr), QIcon::Normal);
-    set.addPixmap(icons::tinted(icon, IconSize, hover, dpr), QIcon::Active);
-    set.addPixmap(icons::tinted(icon, IconSize, theme::Border, dpr), QIcon::Disabled);
+    set.addPixmap(icons::tinted(icon, iconSize, theme::TextMuted, dpr), QIcon::Normal);
+    set.addPixmap(icons::tinted(icon, iconSize, hover, dpr), QIcon::Active);
+    set.addPixmap(icons::tinted(icon, iconSize, theme::Border, dpr), QIcon::Disabled);
 
     auto* button = new QToolButton;
     button->setObjectName(QStringLiteral("iconButton"));
     button->setIcon(set);
-    button->setIconSize(QSize(IconSize, IconSize));
+    button->setIconSize(QSize(iconSize, iconSize));
     button->setAutoRaise(true);
     button->setCursor(Qt::PointingHandCursor);
     button->setFocusPolicy(Qt::NoFocus);
@@ -248,11 +247,11 @@ void MainWindow::removeCurrentChannel() {
     ui::configureDialogWindow(dialog);
     dialog.setWindowTitle(QStringLiteral("Remove channel"));
 
-    constexpr int RemoveIconSize = 40;
+    const int removeIconSize = theme::scaled(dialog.font(), 40);
     auto* icon = new QLabel;
-    icon->setPixmap(icons::tinted(QStringLiteral("trash-2"), RemoveIconSize, theme::Error,
+    icon->setPixmap(icons::tinted(QStringLiteral("trash-2"), removeIconSize, theme::Error,
                                   devicePixelRatioF()));
-    icon->setFixedSize(RemoveIconSize, RemoveIconSize);
+    icon->setFixedSize(removeIconSize, removeIconSize);
     icon->setAlignment(Qt::AlignTop);
 
     const QString impactItems =
@@ -319,20 +318,23 @@ void MainWindow::buildUi() {
     channelsHeaderLayout->setSpacing(4);
 
     auto* channelsTitle = new QLabel(QStringLiteral("CHANNELS"));
-    QFont headerFont = channelsTitle->font();
-    headerFont.setPointSizeF(qMax(6.5, headerFont.pointSizeF() - 1.5));
+    QFont headerFont = theme::secondaryFont(channelsTitle->font());
     headerFont.setBold(true);
     headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
     channelsTitle->setFont(headerFont);
     channelsTitle->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
     const qreal dpr = devicePixelRatioF();
-    addChannelButton_ = headerButton(QStringLiteral("plus"), theme::Accent, dpr);
+    const int headerIconSize = theme::scaled(font(), 14);
+    addChannelButton_ =
+        headerButton(QStringLiteral("plus"), theme::Accent, headerIconSize, dpr);
     // Share and remove both act on the selected row rather than carrying one of
     // their own: per-row buttons would cost sidebar width the uConsole has not
     // got, and hover affordances are no use on a trackball.
-    shareChannelButton_ = headerButton(QStringLiteral("share"), theme::Accent, dpr);
-    removeChannelButton_ = headerButton(QStringLiteral("minus"), theme::Error, dpr);
+    shareChannelButton_ =
+        headerButton(QStringLiteral("share"), theme::Accent, headerIconSize, dpr);
+    removeChannelButton_ =
+        headerButton(QStringLiteral("minus"), theme::Error, headerIconSize, dpr);
 
     channelsHeaderLayout->addWidget(channelsTitle, 1);
     channelsHeaderLayout->addWidget(shareChannelButton_);
@@ -387,13 +389,13 @@ void MainWindow::buildUi() {
     // stop it at the keyboard instead of after a failed transmit.
     input_->setMaxLength(proto::MaxMessageChars);
 
-    constexpr int SendIconSize = 16;
+    const int sendIconSize = theme::scaled(input_->font(), 16);
     QIcon sendIcon;
-    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Accent, dpr),
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), sendIconSize, theme::Accent, dpr),
                        QIcon::Normal);
-    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Text, dpr),
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), sendIconSize, theme::Text, dpr),
                        QIcon::Active);
-    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), SendIconSize, theme::Border, dpr),
+    sendIcon.addPixmap(icons::tinted(QStringLiteral("send"), sendIconSize, theme::Border, dpr),
                        QIcon::Disabled);
     sendAction_ = input_->addAction(sendIcon, QLineEdit::TrailingPosition);
     sendAction_->setObjectName(QStringLiteral("sendAction"));
@@ -401,8 +403,7 @@ void MainWindow::buildUi() {
     sendAction_->setToolTip(QStringLiteral("Send message"));
 
     charCount_ = new QLabel;
-    QFont countFont = charCount_->font();
-    countFont.setPointSizeF(qMax(6.5, countFont.pointSizeF() - 1.5));
+    const QFont countFont = theme::secondaryFont(charCount_->font());
     charCount_->setFont(countFont);
     charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
     charCount_->setMinimumWidth(28);

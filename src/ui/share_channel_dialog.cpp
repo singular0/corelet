@@ -30,12 +30,12 @@ ShareChannelDialog::ShareChannelDialog(const model::Channel& channel, QWidget* p
     key->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     key->setCursorPosition(0);
 
-    constexpr int CopyIconSize = 16;
+    const int copyIconSize = theme::scaled(font(), 16);
     QIcon copyIcon;
-    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::TextMuted,
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), copyIconSize, theme::TextMuted,
                                     devicePixelRatioF()),
                        QIcon::Normal);
-    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), CopyIconSize, theme::Text,
+    copyIcon.addPixmap(icons::tinted(QStringLiteral("copy"), copyIconSize, theme::Text,
                                     devicePixelRatioF()),
                        QIcon::Active);
     QAction* copy = key->addAction(copyIcon, QLineEdit::TrailingPosition);
