@@ -25,9 +25,9 @@ constexpr int MinBubbleWidth = 90;
 // Same disc as a sidebar row's channel icon, so the two lists read as one app.
 constexpr int AvatarSize = 30;
 constexpr int AvatarGap = 8;
-// The send mark sits at the end of the header line on our own messages. It is
-// the same width in either state, so a message being taken by the daemon is a
-// repaint and not a relayout.
+// The send mark starts the metadata on our own messages. It is the same width
+// in either state, so a message being taken by the daemon is a repaint and not
+// a relayout.
 constexpr int MarkSize = 8;
 constexpr int MarkGap = 5;
 constexpr int MarkAllowance = MarkSize + MarkGap;
@@ -118,12 +118,21 @@ void MessageDelegate::setViewportWidth(int width) {
 QString MessageDelegate::metaText(const QModelIndex& index, int availableWidth) const {
     const QDateTime ts = index.data(model::ChatModel::TimestampRole).toDateTime();
     const QString time = ts.toString(QStringLiteral("HH:mm"));
+    if (index.data(model::ChatModel::OutgoingRole).toBool())
+        return QStringLiteral("· %1").arg(time);
     if (!index.data(model::ChatModel::HasSignalRole).toBool()) return time;
 
     const float snr = index.data(model::ChatModel::SnrRole).toFloat();
     const int pathLen = index.data(model::ChatModel::PathLenRole).toInt();
-    const QString hops =
-        pathLen == 0xFF ? QStringLiteral("flood") : QStringLiteral("%1 hop").arg(pathLen);
+    QString hops;
+    if (pathLen == 0xFF)
+        hops = QStringLiteral("flood");
+    else if (pathLen == 0)
+        hops = QStringLiteral("direct");
+    else
+        hops = QStringLiteral("%1 hop%2")
+                   .arg(pathLen)
+                   .arg(pathLen == 1 ? QString() : QStringLiteral("s"));
 
     // Degrade rather than elide: the time is what a reader looks for first, so
     // drop routing, then signal, until what is left fits the bubble.
@@ -184,9 +193,11 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     // text.
     if (hasAvatar) l.avatar = QRect(MarginX, y, AvatarSize, AvatarSize);
     l.header = QRect(x + PadX, y + PadY, bubbleWidth - 2 * PadX, headerHeight);
-    if (outgoing)
-        l.mark = QRect(l.header.x() + l.header.width() - MarkSize,
+    if (outgoing) {
+        const int metaWidth = headerFm.horizontalAdvance(meta);
+        l.mark = QRect(l.header.right() + 1 - metaWidth - MarkGap - MarkSize,
                        l.header.y() + (headerHeight - MarkSize) / 2, MarkSize, MarkSize);
+    }
     l.text = QRect(x + PadX, l.header.bottom() + 1 + HeaderGap, bubbleWidth - 2 * PadX,
                    textBounds.height());
     return l;
@@ -255,11 +266,10 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     painter->drawRoundedRect(l.bubble, BubbleRadius, BubbleRadius);
 
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
-    // The mark is drawn where the metadata would otherwise end, so the text is
-    // measured and placed against a header that stops short of it.
-    const QRect headerText =
-        l.mark.isNull() ? l.header : l.header.adjusted(0, 0, -MarkAllowance, 0);
-    const QString meta = metaText(index, headerText.width());
+    // The mark is drawn separately because the target system font may not have
+    // a tick glyph; the dot and timestamp remain ordinary right-aligned text.
+    const int markAllowance = l.mark.isNull() ? 0 : MarkAllowance;
+    const QString meta = metaText(index, l.header.width() - markAllowance);
 
     if (!l.avatar.isNull()) {
         // The same colour the name is painted in, so the disc and the header
@@ -279,7 +289,7 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         painter->drawText(l.header, Qt::AlignLeft | Qt::AlignVCenter, sender);
     }
     painter->setPen(theme::TextMuted);
-    painter->drawText(headerText, Qt::AlignRight | Qt::AlignVCenter, meta);
+    painter->drawText(l.header, Qt::AlignRight | Qt::AlignVCenter, meta);
 
     if (!l.mark.isNull())
         paintMark(painter, l.mark,

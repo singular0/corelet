@@ -667,7 +667,7 @@ void MainWindow::updateHeader() {
     const int row = channelModel_->rowForIndex(currentChannel_);
     const QString name = channelModel_->data(channelModel_->index(row),
                                              model::ChannelModel::NameRole).toString();
-    header_->setText(QStringLiteral("<b>%1</b> <span style=\"color: %2;\">slot %3</span>")
+    header_->setText(QStringLiteral("<b>%1</b> <span style=\"color: %2;\">[%3]</span>")
                          .arg(name.toHtmlEscaped(), theme::TextMuted.name())
                          .arg(currentChannel_));
 }
@@ -815,11 +815,13 @@ void MainWindow::onTextChanged(const QString& text) {
 void MainWindow::updateInputState() {
     const bool ready = client_->state() == proto::CompanionClient::State::Ready;
     const bool canType = ready && currentChannel_ >= 0;
+    const bool becameAvailable = canType && !input_->isEnabled();
     input_->setEnabled(canType);
     sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty());
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
                                : ready ? QStringLiteral("Select a channel")
                                        : QStringLiteral("Waiting for a connection..."));
+    if (becameAvailable) input_->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::updateChannelActions() {
