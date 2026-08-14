@@ -15,15 +15,22 @@
 # need its host tools pointed at separately. Two divergent build paths to save
 # a few minutes on a package this size is a bad trade.
 #
-# Packages land in dist/. dpkg-buildpackage writes its output next to the
-# source tree, so the native path moves them out of the parent directory
-# afterwards rather than leaving them there.
+# Packages land in dist/. Every build happens in a temporary staged tree: that
+# is where the Git-derived manifest and matching changelog stanza are injected,
+# so dpkg can use them without modifying the checkout.
 
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 out=$root/dist
 image=debian:trixie
+cleanup_stage=
+
+cleanup() {
+    if [ -n "$cleanup_stage" ] && [ -d "$cleanup_stage" ]; then
+        rm -rf "$cleanup_stage"
+    fi
+}
 
 die() {
     echo "build-deb: $*" >&2
@@ -46,20 +53,15 @@ EOF
     exit 2
 }
 
-# A native package's version is whatever debian/changelog says, so a stale
-# entry silently mislabels the build. Compare it against the one source of
-# truth without dpkg-parsechangelog, which does not exist on macOS.
-check_version() {
-    local project changelog
-    project=$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\{1,\}\([0-9][^[:space:]]*\)[[:space:]]*$/\1/p' \
-        "$root/CMakeLists.txt" | head -1)
-    changelog=$(sed -n '1s/^corelet (\([^)]*\)).*/\1/p' "$root/debian/changelog")
-    [ -n "$project" ] && [ -n "$changelog" ] || die "cannot read the project version"
-    if [ "$project" != "$changelog" ]; then
-        echo "build-deb: warning: debian/changelog says $changelog," \
-             "CMakeLists.txt says $project" >&2
-    fi
-    echo "$changelog"
+manifest_value() {
+    local field=$1 manifest=$2
+    sed -n "s/^set($field \"\\(.*\\)\")$/\\1/p" "$manifest"
+}
+
+resolve_version() {
+    local source=$1 manifest=$2
+    cmake -DSOURCE_DIR="$source" -DOUTPUT_MANIFEST="$manifest" \
+        -P "$source/cmake/version.cmake"
 }
 
 # Everything that turns a stock Debian machine into one that can build the
@@ -80,38 +82,79 @@ build_native() {
     command -v dpkg-buildpackage >/dev/null \
         || die "dpkg-buildpackage not found; run '$0 deps', or name an architecture"
 
-    local version arch
-    version=$(check_version)
+    local stage_root source manifest version display date arch maintainer current package actual
+    stage_root=$(mktemp -d)
+    [ -n "$stage_root" ] && [ -d "$stage_root" ] \
+        || die "cannot create a temporary build tree"
+    cleanup_stage=$stage_root
+    trap cleanup EXIT
+    source=$stage_root/corelet
+    manifest=$stage_root/version.cmake
+
+    if [ -n "${CORELET_VERSION_MANIFEST-}" ]; then
+        [ -f "$CORELET_VERSION_MANIFEST" ] \
+            || die "version manifest not found: $CORELET_VERSION_MANIFEST"
+        cp "$CORELET_VERSION_MANIFEST" "$manifest"
+    else
+        resolve_version "$root" "$manifest"
+    fi
+
+    version=$(manifest_value CORELET_VERSION_DEBIAN "$manifest")
+    display=$(manifest_value CORELET_VERSION "$manifest")
+    date=$(manifest_value CORELET_VERSION_DATE "$manifest")
+    [ -n "$version" ] && [ -n "$display" ] && [ -n "$date" ] \
+        || die "the version resolver produced an incomplete manifest"
     arch=$(dpkg --print-architecture)
+
+    mkdir -p "$source"
+    cp -a "$root/." "$source/"
+    rm -rf "$source/.git" "$source/build" "$source/dist"
+    cp "$manifest" "$source/.corelet-version.cmake"
+
+    # debhelper gets the binary-package version from the first changelog stanza.
+    # Existing stanzas remain release history; a generated one is added only
+    # when the frozen Git version is not already represented by the first.
+    current=$(sed -n '1s/^corelet (\([^)]*\)).*/\1/p' "$source/debian/changelog")
+    if [ "$current" != "$version" ]; then
+        maintainer=$(sed -n 's/^Maintainer:[[:space:]]*//p' "$source/debian/control" | head -1)
+        [ -n "$maintainer" ] || die "cannot read the package maintainer"
+        {
+            printf 'corelet (%s) unstable; urgency=medium\n\n' "$version"
+            printf '  * Build from Git version %s.\n\n' "$display"
+            printf ' -- %s  %s\n\n' "$maintainer" "$date"
+            cat "$source/debian/changelog"
+        } >"$source/debian/changelog.generated"
+        mv "$source/debian/changelog.generated" "$source/debian/changelog"
+    fi
 
     # dpkg-buildpackage builds serially unless told otherwise, which on a
     # four-core CM4 leaves three cores idle for the whole compile.
     export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-parallel=$(nproc)}"
-    ( cd "$root" && dpkg-buildpackage -b -us -uc )
+    ( cd "$source" && dpkg-buildpackage -b -us -uc )
 
     mkdir -p "$out"
     # The build emits the package and a -dbgsym alongside it; the .changes and
     # .buildinfo describe an upload nobody is making.
-    mv "$root"/../corelet*_"${version}"_"${arch}".*deb "$out/"
-    rm -f "$root/../corelet_${version}_${arch}.changes" \
-          "$root/../corelet_${version}_${arch}.buildinfo"
+    mv "$stage_root"/corelet*_"${version}"_"${arch}".*deb "$out/"
+    package=$out/corelet_"${version}"_"${arch}".deb
+    actual=$(dpkg-deb -f "$package" Version)
+    [ "$actual" = "$version" ] \
+        || die "package says $actual, version manifest says $version"
     ls -1 "$out"/corelet*_"${version}"_"${arch}".*deb
 }
 
 build_container() {
     local arch=$1
     command -v docker >/dev/null || die "docker is required to build for $arch"
-    check_version >/dev/null
     mkdir -p "$out"
 
     # The source is mounted read-only and copied inside: dpkg-buildpackage
     # writes into the tree and into its parent, and a macOS build/ directory
     # full of Mach-O objects would confuse the Linux build if it came along.
-    # .git goes with it, so the binary inside reports 0.0.0 rather than the tag
-    # it was built from -- these builds are one-offs for a machine that cannot
-    # build natively, and the packages a release ships are built by CI on a
-    # real checkout.
-    # Past the copy this is the native path, unchanged.
+    # Git is resolved from the read-only mount after dependencies are present;
+    # the resulting manifest then follows the source into the second, native
+    # staging step. This makes local container packages just as identifiable as
+    # native and CI packages.
     docker run --rm --platform "linux/$arch" \
         -v "$root:/src:ro" -v "$out:/out" \
         -e "HOST_OWNER=$(id -u):$(id -g)" \
@@ -119,7 +162,11 @@ build_container() {
             cp -a /src /work
             rm -rf /work/build /work/dist /work/.git
             /work/scripts/build-deb.sh deps
-            /work/scripts/build-deb.sh
+            git config --global --add safe.directory /src
+            cmake -DSOURCE_DIR=/src -DOUTPUT_MANIFEST=/tmp/corelet-version.cmake \
+                -P /src/cmake/version.cmake
+            CORELET_VERSION_MANIFEST=/tmp/corelet-version.cmake \
+                /work/scripts/build-deb.sh
             cp /work/dist/*.deb /out/
             chown "$HOST_OWNER" /out/corelet*.deb
         '

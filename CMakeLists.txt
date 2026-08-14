@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 project(corelet
-    VERSION 0.1.0
     DESCRIPTION "MeshCore companion app for the ClockworkPi uConsole"
     LANGUAGES CXX)
 
@@ -25,6 +24,35 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Network Bluetooth Sql 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+# Resolve once while configuring so generated inputs exist, then again before
+# every build so a tag, commit or dirty tracked file is reflected without a
+# manual reconfigure. Packaging passes CORELET_VERSION_MANIFEST to freeze all
+# outputs to the same Git observation while it builds from a staged copy.
+set(CORELET_VERSION_MANIFEST "" CACHE FILEPATH
+    "Frozen version manifest supplied by a packaging build")
+set(CORELET_GENERATED_MANIFEST ${CMAKE_CURRENT_BINARY_DIR}/corelet-version.cmake)
+set(CORELET_VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/version.h)
+set(CORELET_MANPAGE ${CMAKE_CURRENT_BINARY_DIR}/corelet.1)
+set(CORELET_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/Corelet-Info.plist)
+set(version_command
+    ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUTPUT_MANIFEST=${CORELET_GENERATED_MANIFEST}
+    -DOUTPUT_HEADER=${CORELET_VERSION_HEADER}
+    -DOUTPUT_MANPAGE=${CORELET_MANPAGE}
+    -DMANPAGE_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/etc/corelet.1.in
+    -DOUTPUT_PLIST=${CORELET_INFO_PLIST}
+    -DPLIST_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/etc/Info.plist.in)
+if(CORELET_VERSION_MANIFEST)
+    list(APPEND version_command -DINPUT_MANIFEST=${CORELET_VERSION_MANIFEST})
+endif()
+list(APPEND version_command -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake)
+execute_process(COMMAND ${version_command} RESULT_VARIABLE version_status)
+if(NOT version_status EQUAL 0)
+    message(FATAL_ERROR "cannot resolve the Corelet version")
+endif()
+include(${CORELET_GENERATED_MANIFEST})
+
 add_executable(corelet
     src/main.cpp
     src/ui/icons/icons.qrc
@@ -47,19 +75,10 @@ add_executable(corelet
     src/ui/main_window.cpp
 )
 
-# What the app reports for --version and in its title bar is the tag it was
-# built against, not the number above: only the tag says which of the many
-# builds carrying a given version number this one is. The project version stays
-# the release number -- it is what the packages, the bundle and the man page are
-# versioned by -- and a build with no tag to name reports 0.0.0 rather than
-# borrowing it.
-set(CORELET_VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 add_custom_target(corelet-version
-    BYPRODUCTS ${CORELET_VERSION_HEADER}
-    COMMAND ${CMAKE_COMMAND}
-        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-        -DOUTPUT=${CORELET_VERSION_HEADER}
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+    BYPRODUCTS ${CORELET_GENERATED_MANIFEST} ${CORELET_VERSION_HEADER}
+               ${CORELET_MANPAGE} ${CORELET_INFO_PLIST}
+    COMMAND ${version_command}
     COMMENT "Resolving the version from git"
     VERBATIM)
 add_dependencies(corelet corelet-version)
@@ -94,10 +113,6 @@ if(APPLE)
     # Reverse-DNS of a domain the author controls. github.io is the usual stand-in
     # when there is no vanity domain, and it is what Flathub asks for too, so the
     # same identifier works on both stores if this is ever published.
-    set(MACOSX_BUNDLE_GUI_IDENTIFIER io.github.singular0.corelet)
-    set(MACOSX_BUNDLE_BUNDLE_NAME Corelet)
-    set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
-    set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
     set_source_files_properties(assets/corelet.icns PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
     target_sources(corelet PRIVATE assets/corelet.icns)
@@ -108,14 +123,10 @@ if(APPLE)
         OUTPUT_NAME Corelet
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_ICON_FILE corelet.icns
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/etc/Info.plist.in)
+        MACOSX_BUNDLE_INFO_PLIST ${CORELET_INFO_PLIST})
 endif()
 
 include(GNUInstallDirs)
-
-# The man page carries the project version, so it is generated rather than
-# shipped verbatim; @ONLY keeps roff's own ${...}-free syntax out of the way.
-configure_file(etc/corelet.1.in ${CMAKE_CURRENT_BINARY_DIR}/corelet.1 @ONLY)
 
 install(TARGETS corelet
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -123,10 +134,10 @@ install(TARGETS corelet
 install(FILES etc/corelet.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
 install(FILES assets/corelet.png
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/512x512/apps)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/corelet.1
+install(FILES ${CORELET_MANPAGE}
     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-message(STATUS "corelet ${PROJECT_VERSION} (Qt ${Qt6_VERSION})")
+message(STATUS "corelet ${CORELET_VERSION} (Qt ${Qt6_VERSION})")
 
 include(CTest)
 if(BUILD_TESTING)
@@ -151,4 +162,9 @@ if(BUILD_TESTING)
         target_compile_options(chat-model-test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME chat-model-test COMMAND chat-model-test)
+
+    add_test(NAME version-test
+        COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/version_test.cmake)
 endif()

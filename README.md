@@ -68,7 +68,7 @@ Take `arm64` for the uConsole or a Raspberry Pi, `amd64` for an x86 desktop. The
 for Debian 13 (trixie) and want that or newer, since they use the system's Qt 6.
 
 ```sh
-sudo apt install ./corelet_0.1.0_arm64.deb
+sudo apt install ./corelet_*_arm64.deb
 ```
 
 Install the *file path*, not the bare name — that leading `./` is what lets apt pull the Qt runtime

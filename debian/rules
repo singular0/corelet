@@ -10,3 +10,10 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # the hardening options above feed.
 %:
 	dh $@ --buildsystem=cmake
+
+# scripts/build-deb.sh creates this manifest before copying the source into its
+# staging tree. Passing the snapshot through keeps the Git-less staged compile,
+# package metadata and filename on precisely the same version.
+override_dh_auto_configure:
+	dh_auto_configure --buildsystem=cmake -- \
+		-DCORELET_VERSION_MANIFEST=$(CURDIR)/.corelet-version.cmake

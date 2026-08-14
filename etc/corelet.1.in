@@ -1,7 +1,6 @@
-.\" Installed by cmake --install and by the Debian package. The version comes
-.\" from the project so the two cannot drift; the date is edited by hand,
-.\" since stamping the build date would make the package unreproducible.
-.TH CORELET 1 "August 2026" "corelet @PROJECT_VERSION@" "User Commands"
+.\" Installed by cmake --install and by the Debian package. The version is the
+.\" same frozen Git identity compiled into the executable.
+.TH CORELET 1 "August 2026" "corelet @CORELET_VERSION@" "User Commands"
 .SH NAME
 corelet \- MeshCore companion app for the ClockworkPi uConsole
 .SH SYNOPSIS

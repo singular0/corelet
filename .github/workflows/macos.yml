@@ -34,7 +34,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       # As in debian.yml: git describe is where the built binary's version
-      # comes from, and it needs the tags a shallow clone leaves behind.
+      # comes from, and post-release builds need the history and tags omitted
+      # by a shallow clone.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

@@ -37,7 +37,7 @@ won't compile. `compile_commands.json` is a symlink into `build/`.
 argument runs `dpkg-buildpackage` natively; `deps` installs Build-Depends first; `arm64|amd64|all`
 sets up a `debian:trixie` container and runs that same native path inside it, which is what works
 from macOS. Output goes to `dist/`, each `.deb` beside the `-dbgsym` package holding its symbols;
-install one as `sudo apt install ./dist/corelet_0.1.0_arm64.deb` so apt resolves the Qt runtime.
+install one as `sudo apt install ./dist/corelet_*_arm64.deb` so apt resolves the Qt runtime.
 A foreign architecture runs under Docker's qemu binfmt handler, so an arm64 build on an x86 host
 takes about half an hour against four minutes native — fine for a one-off, which is the only thing
 it is for.
@@ -46,27 +46,32 @@ CI (`.github/workflows/debian.yml`) builds each architecture on its own runner r
 cross-compiling or emulating: debhelper skips `dh_auto_test` when the host architecture differs
 from the build one, so a cross-built package would ship untested. Don't add a cross path.
 
-The package is source format `3.0 (native)`, so its version is `debian/changelog`'s and must be
-kept level with `project(... VERSION ...)` — the script warns when they drift. Build-Depends in
-`debian/control` are the single source of dependency truth: `apt-get build-dep` reads them, so no
-list of Qt packages is repeated in the script, the workflow or the README.
+The package is source format `3.0 (native)`. `scripts/build-deb.sh` resolves Git once, copies the
+source into a temporary tree, and prepends a generated `debian/changelog` stanza there; the
+checked-in changelog is release history, not a version input. The staged tree carries the frozen
+version manifest into CMake, so package metadata and the binary cannot observe different commits.
+Build-Depends in `debian/control` are the single source of dependency truth: `apt-get build-dep`
+reads them, so no list of Qt packages is repeated in the script, workflow or README.
 
-Two version numbers with different jobs. `project(... VERSION ...)` and `debian/changelog` version
-the *packages* — the `.deb`'s version, `CFBundleShortVersionString`, the DMG filename, the man page
-— and are hand-bumped, level with each other. What the binary itself reports for `--version` and in
-its title bar is the tag it was built against: `cmake/version.cmake` runs `git describe --tags
---dirty --match 'v[0-9]*'`, strips the `v` and writes `build/version.h`. That runs on every build
-rather than at configure time, because tagging a commit changes nothing CMake would otherwise
-notice; the header is rewritten only when the string changes, so an unchanged build compiles
-nothing. A checkout with no tag to find — a source tarball, a shallow clone, the container `.deb`
-build that drops `.git` — reports `0.0.0`, which is no release and reads as the unknown build it
-is; it deliberately does not borrow `project(... VERSION ...)`, since a binary that cannot name the
-tag it came from should not claim one. That is why both packaging workflows check out with
-`fetch-depth: 0`: on a default shallow clone every release binary would report `0.0.0`.
+Git is the only source of the current version. `cmake/version.cmake` accepts valid `v` + SemVer
+release tags and produces one canonical identity plus the syntax-constrained Debian and Apple
+forms. An exact `v1.2.3` reports `1.2.3`; later commits report `1.2.3-N-gHASH`; a Git checkout with
+no reachable release tag reports `0.0.0-HASH`; and a tree without usable Git metadata reports
+`0.0.0`. Staged or unstaged tracked changes add `-dirty`; untracked build products do not. The
+resolver generates the header, man page and Info.plist on every build and only rewrites changed
+files, so tagging an already configured checkout updates its identity without forcing an otherwise
+unchanged rebuild.
 
-`scripts/build-dmg.sh` builds the macOS disk image into `build/dmg/` — never into `build/`, which
-has to keep linking against Homebrew Qt for development — runs `macdeployqt`, ad-hoc signs and
-packages with `hdiutil`. Its version comes from `CMakeLists.txt` alone, so nothing can drift.
+Debian native versions cannot contain hyphens, so prereleases use `~` and development components
+use `+`/`.` there. Apple's standard bundle fields are numeric: `CFBundleShortVersionString` uses
+the tag's numeric core (or `0.0.0`) and `CFBundleVersion` uses the Git commit count (or `0`); the
+full canonical string is also stored as `CoreletVersion`. Both packaging workflows check out with
+`fetch-depth: 0`, otherwise a post-tag CI build would fall back to `0.0.0-HASH`.
+
+`scripts/build-dmg.sh` freezes the Git manifest and builds the macOS disk image into `build/dmg/`
+— never into `build/`, which has to keep linking against Homebrew Qt for development — runs
+`macdeployqt`, ad-hoc signs and packages with `hdiutil`. The manifest versions the binary, bundle,
+man page, DMG filename and volume label together.
 After `macdeployqt` it drops Qt's virtual-keyboard input context and the unusable QtPdf image
 plugin, then sweeps `Frameworks/` for anything no remaining binary links, which is what keeps the
 QML runtime out of a Widgets app: dropping the keyboard plugin orphans QtQuick and QtQml, which in
@@ -104,9 +109,9 @@ cask would not help, because casks quarantine by default. Both dissolve with a p
 which turns this into `codesign --options runtime -s "Developer ID Application: ..."`,
 `xcrun notarytool submit --wait` and `xcrun stapler staple`.
 
-Pushing a version tag is the whole release process — bump `CMakeLists.txt` and `debian/changelog`
-first, then `git tag v0.2.0 && git push origin v0.2.0`. The release publishes all four packages
-plus a `SHA256SUMS` file, which is the only verification a download has since nothing is notarized
+Pushing a version tag is the whole release process: `git tag v0.2.0 && git push origin v0.2.0`.
+The release publishes all four packages plus a `SHA256SUMS` file, which is the only verification a
+download has since nothing is notarized
 or signed against a key a stranger can check. Both `-dbgsym` packages stay out of the release —
 they are for debugging a build you already have and would double the asset list — but CI still
 uploads them as build artifacts on every push.
@@ -116,9 +121,8 @@ uploads them as build artifacts on every push.
 is built by the same jobs CI already runs and a tag never builds twice. Neither packaging workflow
 should get a tag trigger back. Releases are `v` + semver only: the `tags:` glob is the closest
 GitHub's filter syntax gets, and the `gate` job re-checks with semver's regex and *skips* the run
-on a non-match — an unrecognised tag is not a failure. A tag whose version is ahead of
-`debian/changelog` or `project(... VERSION ...)` does fail, because neither package takes its
-version from the tag and the release would carry the previous version's files.
+on a non-match — an unrecognised tag is not a failure. It also checks that the shared resolver sees
+the pushed tag exactly before starting the package jobs.
 
 ## Do not visually verify UI work
 

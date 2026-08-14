@@ -45,15 +45,21 @@ EOF
     exit 2
 }
 
-# CFBundleShortVersionString comes from project(... VERSION ...) via
-# etc/Info.plist.in, so unlike the Debian package there is no second version to
-# drift out of sync -- this only has to name the file.
-project_version() {
-    local version
-    version=$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\{1,\}\([0-9][^[:space:]]*\)[[:space:]]*$/\1/p' \
-        "$root/CMakeLists.txt" | head -1)
-    [ -n "$version" ] || die "cannot read the project version"
-    echo "$version"
+# Read one field from the CMake manifest without evaluating it as shell. Values
+# are restricted to Git/SemVer output and the commit date, but treating this as
+# data keeps the boundary explicit anyway.
+manifest_value() {
+    local field=$1 manifest=$2
+    sed -n "s/^set($field \"\\(.*\\)\")$/\\1/p" "$manifest"
+}
+
+# Freeze Git before configuring: the generated header, bundle metadata, man
+# page and DMG name must all describe the same observation of the checkout.
+resolve_version() {
+    local manifest=$1
+    mkdir -p "${manifest%/*}"
+    cmake -DSOURCE_DIR="$root" -DOUTPUT_MANIFEST="$manifest" \
+        -P "$root/cmake/version.cmake"
 }
 
 qt_prefix() {
@@ -77,10 +83,11 @@ install_deps() {
 # undoes. It also means a release never inherits whatever CMAKE_BUILD_TYPE the
 # working tree happens to be configured with.
 build_app() {
-    local qt=$1
+    local qt=$1 manifest=$2
     cmake -S "$root" -B "$work/cmake" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_PREFIX_PATH="$qt" >/dev/null
+        -DCMAKE_PREFIX_PATH="$qt" \
+        -DCORELET_VERSION_MANIFEST="$manifest" >/dev/null
     cmake --build "$work/cmake" -j"$(sysctl -n hw.ncpu)"
     ctest --test-dir "$work/cmake" --output-on-failure
 }
@@ -229,13 +236,21 @@ adhoc_sign() {
 # to /Applications gives the drag-to-install layout with nothing but the tools
 # macOS already ships.
 build_dmg() {
-    local qt version arch app stage dmg
+    local qt version arch app stage dmg manifest bundled_version
     qt=$(qt_prefix)
     [ -x "$qt/bin/macdeployqt" ] || die "no macdeployqt in $qt/bin"
-    version=$(project_version)
+    manifest=$work/version.cmake
+    resolve_version "$manifest"
+    version=$(manifest_value CORELET_VERSION "$manifest")
+    [ -n "$version" ] || die "the version resolver produced no version"
     arch=$(uname -m)
 
-    build_app "$qt"
+    build_app "$qt" "$manifest"
+
+    bundled_version=$(/usr/libexec/PlistBuddy -c 'Print :CoreletVersion' \
+        "$work/cmake/Corelet.app/Contents/Info.plist")
+    [ "$bundled_version" = "$version" ] \
+        || die "bundle says $bundled_version, version manifest says $version"
 
     stage=$work/stage
     rm -rf "$stage"

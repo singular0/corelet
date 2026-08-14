@@ -41,7 +41,7 @@ jobs:
 
       # Whole history and every tag: the binary takes its version from git
       # describe, and checkout's default shallow clone has no tag to find, so a
-      # release would ship packages reporting the previous version number.
+      # post-release build would lose the tag component and use 0.0.0-hash.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

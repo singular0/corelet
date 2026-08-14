@@ -21,12 +21,13 @@ jobs:
     outputs:
       release: ${{ steps.check.outputs.release }}
       version: ${{ steps.check.outputs.version }}
-      # What the built files are named, which on a prerelease tag is not the
-      # same string: the packages know nothing about -rc.1.
-      core: ${{ steps.check.outputs.core }}
+      # Debian maps SemVer prerelease punctuation into its own ordering syntax.
+      package: ${{ steps.check.outputs.package }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - id: check
         run: |
@@ -46,20 +47,16 @@ jobs:
               exit 0
           fi
 
-          # Both packages take their version from the tree, never from the tag:
-          # the .deb's is debian/changelog's because the source format is
-          # native, and the .dmg's is project(... VERSION ...) via
-          # etc/Info.plist.in. So a tag ahead of either one does not produce
-          # what it names -- it produces the previous version's files under a
-          # new release. That is a mistake in the tag, not an unknown tag, so
-          # it fails loudly instead of being skipped.
-          core=${version%%[-+]*}
-          project=$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\{1,\}\([0-9][^[:space:]]*\)[[:space:]]*$/\1/p' \
-              CMakeLists.txt | head -1)
-          changelog=$(sed -n '1s/^corelet (\([^)]*\)).*/\1/p' debian/changelog)
-          if [ "$core" != "$project" ] || [ "$core" != "$changelog" ]; then
-              echo "::error::tag $tag is $core, but CMakeLists.txt says" \
-                   "$project and debian/changelog says $changelog"
+          # Ask the same resolver the packages call. On a tag this must be the
+          # tag verbatim (minus v); checking it here catches checkout/ref bugs
+          # before four architecture jobs do expensive work.
+          manifest=$(mktemp)
+          cmake -DSOURCE_DIR=. -DOUTPUT_MANIFEST="$manifest" \
+              -P cmake/version.cmake
+          resolved=$(sed -n 's/^set(CORELET_VERSION "\(.*\)")$/\1/p' "$manifest")
+          package=$(sed -n 's/^set(CORELET_VERSION_DEBIAN "\(.*\)")$/\1/p' "$manifest")
+          if [ "$resolved" != "$version" ] || [ -z "$package" ]; then
+              echo "::error::tag $tag resolved as '$resolved' (Debian '$package')"
               exit 1
           fi
 
@@ -70,7 +67,7 @@ jobs:
 
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "core=$core" >> "$GITHUB_OUTPUT"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   # The same workflows that build every push, called rather than copied so a
@@ -127,7 +124,7 @@ jobs:
             `amd64` for an x86 desktop. Installing the file rather than the
             bare name is what pulls the Qt runtime in with it:
 
-                sudo apt install ./corelet_${{ needs.gate.outputs.core }}_arm64.deb
+                sudo apt install ./corelet_${{ needs.gate.outputs.package }}_arm64.deb
 
             **macOS** -- `arm64` for Apple Silicon, `x86_64` for Intel. The
             disk images want macOS 15 or newer, since the Qt inside them is a

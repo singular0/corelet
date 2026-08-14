@@ -8,6 +8,7 @@ Maintainer: Denis Yantarev <denis.yantarev@gmail.com>
 Build-Depends:
  cmake (>= 3.16),
  debhelper-compat (= 13),
+ git,
  libqt6sql6-sqlite,
  qt6-base-dev (>= 6.2),
  qt6-connectivity-dev,
