@@ -97,6 +97,34 @@ jobs:
           merge-multiple: true
           path: dist
 
+      # The gate resolved the tag on its own runner; each package job resolves
+      # it again on its own. v0.1.0 shipped with the two of them disagreeing --
+      # correct DMGs beside debs that called themselves 0.0.0, because the
+      # container builds could not read the checkout and said so to nobody.
+      # Every asset carries its version in its name, so the tag can be checked
+      # against what four separate jobs actually produced, one step before the
+      # release exists.
+      - name: Check the packages carry the tag's version
+        working-directory: dist
+        run: |
+          wrong=
+          for f in corelet_*.deb; do
+              case $f in
+                  corelet_${{ needs.gate.outputs.package }}_*.deb) ;;
+                  *) wrong="$wrong $f" ;;
+              esac
+          done
+          for f in Corelet-*.dmg; do
+              case $f in
+                  Corelet-${{ needs.gate.outputs.version }}-*.dmg) ;;
+                  *) wrong="$wrong $f" ;;
+              esac
+          done
+          if [ -n "$wrong" ]; then
+              echo "::error::$GITHUB_REF_NAME did not build as itself:$wrong"
+              exit 1
+          fi
+
       # Nothing here is notarized or signed with a key anyone can check
       # against, so the checksums are the only way a download can be verified
       # at all. The -dbgsym packages stay out of the release: they are for

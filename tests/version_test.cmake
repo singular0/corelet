@@ -36,6 +36,16 @@ function(resolve source output)
     endif()
 endfunction()
 
+function(resolve_failure source output label)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${source}
+                -DOUTPUT_MANIFEST=${output} -P "${resolver}"
+        OUTPUT_QUIET ERROR_QUIET RESULT_VARIABLE status)
+    if(status EQUAL 0)
+        message(FATAL_ERROR "${label}: the resolver answered anyway")
+    endif()
+endfunction()
+
 function(assert_equal actual expected label)
     if(NOT "${actual}" STREQUAL "${expected}")
         message(FATAL_ERROR "${label}: expected '${expected}', got '${actual}'")
@@ -107,4 +117,27 @@ assert_equal("${CORELET_VERSION}" "0.0.0" "Git-less fallback")
 assert_equal("${CORELET_VERSION_DEBIAN}" "0.0.0" "Git-less Debian fallback")
 assert_equal("${CORELET_VERSION_BUILD}" "0" "Git-less bundle build")
 
-file(REMOVE_RECURSE "${repo}" "${plain}" "${manifest}")
+# git init and nothing committed: a repository with no identity to report yet,
+# which is not the same as one that cannot be read.
+set(unborn "${TEST_ROOT}/version-test-unborn")
+file(MAKE_DIRECTORY "${unborn}")
+execute_process(COMMAND git init -q WORKING_DIRECTORY "${unborn}"
+                OUTPUT_QUIET ERROR_VARIABLE error RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+    message(FATAL_ERROR "git init failed in ${unborn}: ${error}")
+endif()
+resolve("${unborn}" "${manifest}")
+include("${manifest}")
+assert_equal("${CORELET_VERSION}" "0.0.0" "unborn HEAD fallback")
+
+# A .git Git refuses to read has to fail the build rather than resolve to
+# 0.0.0. v0.1.0 shipped debs stamped 0.0.0 underneath a changelog that said
+# 0.1.0 because a container job hit precisely this -- a checkout owned by
+# another user -- and got an answer instead of an error. Ownership needs two
+# users to reproduce; a gitdir pointing nowhere is the same refusal.
+set(broken "${TEST_ROOT}/version-test-broken")
+file(MAKE_DIRECTORY "${broken}")
+file(WRITE "${broken}/.git" "gitdir: ${TEST_ROOT}/nowhere\n")
+resolve_failure("${broken}" "${manifest}" "unreadable checkout")
+
+file(REMOVE_RECURSE "${repo}" "${plain}" "${unborn}" "${broken}" "${manifest}")

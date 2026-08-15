@@ -162,7 +162,6 @@ build_container() {
             cp -a /src /work
             rm -rf /work/build /work/dist /work/.git
             /work/scripts/build-deb.sh deps
-            git config --global --add safe.directory /src
             cmake -DSOURCE_DIR=/src -DOUTPUT_MANIFEST=/tmp/corelet-version.cmake \
                 -P /src/cmake/version.cmake
             CORELET_VERSION_MANIFEST=/tmp/corelet-version.cmake \

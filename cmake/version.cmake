@@ -57,17 +57,55 @@ else()
     set(CORELET_VERSION_BUILD "0")
     set(CORELET_VERSION_DATE "Thu, 01 Jan 1970 00:00:00 +0000")
 
+    # Two different things produce no version here, and only one of them is
+    # fine. A source copy with no repository -- a downloaded tarball, or the
+    # staging tree the Debian package builds from -- is genuinely 0.0.0. A tree
+    # that does have a .git and still yields nothing is a broken build, not a
+    # version: that case once put 0.0.0 packages into a tagged release,
+    # silently, and beneath the version the changelog itself already carried.
+    # So from here on, a .git that cannot be read is fatal.
     find_package(Git QUIET)
+    if(SOURCE_DIR AND EXISTS "${SOURCE_DIR}/.git" AND NOT GIT_EXECUTABLE)
+        message(FATAL_ERROR "no git to read the checkout at ${SOURCE_DIR}")
+    endif()
     if(GIT_EXECUTABLE AND SOURCE_DIR)
+        # Since 2.35 Git refuses to read a repository owned by another user,
+        # which is exactly what a container build is: the workspace belongs to
+        # the host's runner account and the build runs as root. Nothing here
+        # does more than read the identity of a tree the caller already told us
+        # to compile, so the directory we were pointed at is trusted for the
+        # duration. safe.directory is honoured only from protected scopes --
+        # system, global and command line -- so it has to be passed as -c
+        # rather than an environment variable, and it must be the physical path
+        # Git resolves the repository to, not a route through a symlink.
+        get_filename_component(source_path "${SOURCE_DIR}" REALPATH)
+        set(git "${GIT_EXECUTABLE}" -c "safe.directory=${source_path}")
+
         execute_process(
-            COMMAND "${GIT_EXECUTABLE}" rev-parse --verify HEAD
+            COMMAND ${git} rev-parse --is-inside-work-tree
             WORKING_DIRECTORY "${SOURCE_DIR}"
             OUTPUT_QUIET
-            ERROR_QUIET
-            RESULT_VARIABLE have_head)
+            ERROR_VARIABLE git_error
+            RESULT_VARIABLE in_repository)
+        if(NOT in_repository EQUAL 0 AND EXISTS "${SOURCE_DIR}/.git")
+            message(FATAL_ERROR
+                "Git cannot read the checkout at ${SOURCE_DIR}: ${git_error}")
+        endif()
+
+        # A repository whose HEAD is unborn -- git init with nothing committed
+        # yet -- has no identity to report and no build to break.
+        set(have_head 1)
+        if(in_repository EQUAL 0)
+            execute_process(
+                COMMAND ${git} rev-parse --verify HEAD
+                WORKING_DIRECTORY "${SOURCE_DIR}"
+                OUTPUT_QUIET
+                ERROR_QUIET
+                RESULT_VARIABLE have_head)
+        endif()
         if(have_head EQUAL 0)
             execute_process(
-                COMMAND "${GIT_EXECUTABLE}" rev-parse --short=7 HEAD
+                COMMAND ${git} rev-parse --short=7 HEAD
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 OUTPUT_VARIABLE short_hash
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -77,7 +115,7 @@ else()
                 message(FATAL_ERROR "cannot resolve Git hash: ${git_error}")
             endif()
             execute_process(
-                COMMAND "${GIT_EXECUTABLE}" rev-list --count HEAD
+                COMMAND ${git} rev-list --count HEAD
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 OUTPUT_VARIABLE CORELET_VERSION_BUILD
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -87,7 +125,7 @@ else()
                 message(FATAL_ERROR "cannot count Git commits: ${git_error}")
             endif()
             execute_process(
-                COMMAND "${GIT_EXECUTABLE}" show -s --format=%aD HEAD
+                COMMAND ${git} show -s --format=%aD HEAD
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 OUTPUT_VARIABLE CORELET_VERSION_DATE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -98,7 +136,7 @@ else()
             endif()
 
             execute_process(
-                COMMAND "${GIT_EXECUTABLE}" tag --merged HEAD
+                COMMAND ${git} tag --merged HEAD
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 OUTPUT_VARIABLE merged_tags
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -108,7 +146,7 @@ else()
                 message(FATAL_ERROR "cannot list Git tags: ${git_error}")
             endif()
             string(REPLACE "\n" ";" merged_tags "${merged_tags}")
-            set(describe_command "${GIT_EXECUTABLE}" describe --tags --long --abbrev=7)
+            set(describe_command ${git} describe --tags --long --abbrev=7)
             set(release_tag_count 0)
             foreach(tag IN LISTS merged_tags)
                 is_release_tag("${tag}" valid)
@@ -163,7 +201,7 @@ else()
             # Match git describe --dirty: staged and unstaged tracked changes
             # count, while untracked build products do not.
             execute_process(
-                COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=no
+                COMMAND ${git} status --porcelain --untracked-files=no
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 OUTPUT_VARIABLE dirty
                 OUTPUT_STRIP_TRAILING_WHITESPACE

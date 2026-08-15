@@ -10,8 +10,9 @@ each other.
 ## Build
 
 Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are two CTest binaries
-built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`); run them with
-`ctest --test-dir build`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
+built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`) plus
+`tests/version_test.cmake`, which drives the version resolver over throwaway repositories rather
+than compiling anything; run them with `ctest --test-dir build`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
 the history test opens a real QSQLITE database and `dh_auto_test` fails without the driver plugin.
 
 ```sh
@@ -56,11 +57,23 @@ reads them, so no list of Qt packages is repeated in the script, workflow or REA
 Git is the only source of the current version. `cmake/version.cmake` accepts valid `v` + SemVer
 release tags and produces one canonical identity plus the syntax-constrained Debian and Apple
 forms. An exact `v1.2.3` reports `1.2.3`; later commits report `1.2.3-N-gHASH`; a Git checkout with
-no reachable release tag reports `0.0.0-HASH`; and a tree without usable Git metadata reports
-`0.0.0`. Staged or unstaged tracked changes add `-dirty`; untracked build products do not. The
+no reachable release tag reports `0.0.0-HASH`; and a source tree with no repository in it at all —
+a downloaded tarball, or the staging tree the Debian package builds from — reports `0.0.0`.
+Staged or unstaged tracked changes add `-dirty`; untracked build products do not. The
 resolver generates the header, man page and Info.plist on every build and only rewrites changed
 files, so tagging an already configured checkout updates its identity without forcing an otherwise
 unchanged rebuild.
+
+A tree that *does* have a `.git` and still yields nothing is a hard error rather than a `0.0.0`.
+That distinction is what v0.1.0 was missing: Git refuses a repository owned by another user, which
+is what a container job is — the workspace belongs to the runner account and the build runs as
+root — so the Debian jobs resolved nothing, said so to nobody, and shipped debs stamped `0.0.0`
+underneath a changelog that said `0.1.0`, beside correctly named DMGs. The resolver now passes
+`-c safe.directory` for the source directory it was pointed at (`safe.directory` is read only from
+protected scopes, so an environment variable would not do, and it must be the physical path, not a
+route through a symlink), which fixes CI, the local container path and any `sudo` build in one
+place. `release.yml` then re-checks the built filenames against the tag before publishing, because
+every job resolving the version separately is exactly how they came to disagree.
 
 Debian native versions cannot contain hyphens, so prereleases use `~` and development components
 use `+`/`.` there. Apple's standard bundle fields are numeric: `CFBundleShortVersionString` uses
