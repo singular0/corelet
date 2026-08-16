@@ -225,6 +225,29 @@ Violating any of these produces bugs that only show up against a real device:
 Commit straight to `main` unless asked for a branch. Don't create a feature branch, and don't ask
 for permission to commit to the default branch.
 
+## Backlog
+
+The backlog lives in GitHub issues (`gh issue list`) and nowhere else. There used to be a `TODO.md`
+and a `FEATURES.md`; they were deleted once their contents became issues, because a checklist in the
+tree and a tracker are the same list maintained twice and they drift within a week. Don't reinstate
+either, and don't leave `TODO` comments in the code as a way of remembering work — open an issue and
+reference its number if the code needs the pointer at all.
+
+Issues carry three kinds of label, and every issue gets a priority and at least one area:
+
+- `priority: P0` through `P4` — P0 is "the app is incomplete without this", P4 is someday.
+- `area: protocol` / `area: ui` / `area: persistence` — where the work lands.
+- `bug`, `enhancement`, `tech-debt` — the last one is structural work on code that already exists
+  and behaves, as distinct from a defect.
+
+Write an issue the way comments here are written: what is missing or wrong, *why* it matters, the
+`file.cpp:line` references that anchor it, then a task checklist. Say what it depends on with an
+issue number — the ordering between them is the part that is expensive to rediscover.
+
+Keep it current as work lands. A commit that finishes an issue closes it (`Closes #12` in the
+message); a commit that only moves it along ticks the boxes it completed. When you notice something
+worth doing that is outside the current task, open an issue rather than widening the change.
+
 ## Conventions
 
 - `QT_NO_KEYWORDS` is defined: use `Q_SIGNALS` / `Q_SLOTS` / `Q_EMIT`, never the lowercase macros.
