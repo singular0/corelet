@@ -58,7 +58,9 @@ add_executable(corelet
     src/ui/icons/icons.qrc
     src/protocol/frame_codec.cpp
     src/protocol/transport.cpp
+    src/protocol/stream_transport.cpp
     src/protocol/tcp_transport.cpp
+    src/protocol/unix_transport.cpp
     src/protocol/ble_transport.cpp
     src/protocol/client.cpp
     src/model/history.cpp

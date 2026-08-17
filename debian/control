@@ -24,10 +24,10 @@ Depends:
  ${shlibs:Depends},
 Recommends: bluez
 Description: MeshCore mesh messenger for the ClockworkPi uConsole
- Corelet is a Qt 6 client for a MeshCore node. It talks to a umeshcored
- companion daemon over TCP, or straight to a MeshCore device over Bluetooth
- LE, and shows the node's channels as a chat window laid out for the
- uConsole's 1280x480 panel.
+ Corelet is a Qt 6 client for a MeshCore node. It talks to a MeshCore
+ companion daemon over a Unix socket or TCP, or straight to a MeshCore device
+ over Bluetooth LE, and shows the node's channels as a chat window laid out
+ for the uConsole's 1280x480 panel.
  .
  All radio work, crypto and channel state live in the daemon or in the device
  firmware, so this package is the client and nothing else. Message history is

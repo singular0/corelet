@@ -75,7 +75,7 @@ struct Channel {
     }
 
     static ChannelType classify(const QString& name, const QByteArray& secret) {
-        // Mirrors umeshcore's mesh::Channel: a key that can be re-derived from
+        // Mirrors coreletd's mesh::Channel: a key that can be re-derived from
         // something public is a public channel, and anything else arrived by a
         // route only the two ends know.
         if (secret == publicChannelKey()) return ChannelType::Public;

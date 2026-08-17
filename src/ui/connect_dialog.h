@@ -13,7 +13,8 @@ class QPushButton;
 class QTabWidget;
 class QBluetoothDeviceDiscoveryAgent;
 
-// Asks what to connect to: a umeshcored over TCP, or a device over BLE.
+// Asks what to connect to: a companion daemon over a Unix socket or TCP, or a
+// device over BLE.
 //
 // Shown at startup and again whenever the user wants to point the app somewhere
 // else, so it has to work both from cold — nothing remembered, no scan done —
@@ -43,6 +44,9 @@ private:
     void stopScan();
     void rebuildDeviceList();
     void updateConnectButton();
+    // What the socket tab currently describes, valid or not: the Connect button
+    // and the accepted result are the same decision made twice.
+    proto::ConnectTarget socketTarget() const;
     void setBleStatus(const QString& text, bool error = false);
     // Bluetooth needs an explicit grant on some platforms, and a scan started
     // without it fails silently. Calls startScan() once it has one.
@@ -51,6 +55,7 @@ private:
     proto::ConnectTarget target_;
 
     QTabWidget* tabs_ = nullptr;
+    QLineEdit* socketPath_ = nullptr;
     QLineEdit* host_ = nullptr;
     QLineEdit* port_ = nullptr;
     QListWidget* devices_ = nullptr;

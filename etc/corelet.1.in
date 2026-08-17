@@ -5,6 +5,8 @@
 corelet \- MeshCore companion app for the ClockworkPi uConsole
 .SH SYNOPSIS
 .B corelet
+.RB [ \-s
+.IR path ]
 .RB [ \-H
 .IR host ]
 .RB [ \-p
@@ -13,10 +15,11 @@ corelet \- MeshCore companion app for the ClockworkPi uConsole
 .IR device ]
 .SH DESCRIPTION
 .B corelet
-is a chat window for a MeshCore node. It reaches the node either through a
-.BR umeshcored (8)
-companion daemon over TCP, or directly over Bluetooth LE, lists the node's
-configured channels and sends and receives messages on them.
+is a chat window for a MeshCore node. It reaches the node through a
+.BR coreletd (8)
+companion daemon, over that daemon's Unix socket or over TCP, or directly over
+Bluetooth LE, lists the node's configured channels and sends and receives
+messages on them.
 .PP
 It is a client only: all radio work, crypto and channel state live in the
 daemon or in the device firmware.
@@ -24,6 +27,12 @@ daemon or in the device firmware.
 Started with no target, the app asks for one and remembers the answer. Naming
 a target on the command line skips that dialog.
 .SH OPTIONS
+.TP
+.BR \-s ", " \-\-socket " " \fIpath\fR
+Unix socket the daemon listens on, matching its
+.I companion_socket
+setting. Must be an absolute path. Defaults to
+.IR /run/coreletd/companion.sock .
 .TP
 .BR \-H ", " \-\-host " " \fIhost\fR
 Host running the MeshCore daemon. Defaults to 127.0.0.1.
@@ -53,11 +62,13 @@ Window geometry, the connection target and the offline channel cache.
 .SH SECURITY
 The companion protocol has
 .B no authentication.
-The daemon binds loopback by default; only point
+The daemon's Unix socket is restricted by its owner, group and mode, and is
+the only endpoint that restricts anything; over TCP the daemon binds loopback
+by default, so only point
 .B corelet
 at another host across a network you control.
 .PP
 Channel messages carry the sender's name in their text and nothing signs it,
 so a name shown next to a message is a claim, not an identity.
 .SH SEE ALSO
-.BR umeshcored (8)
+.BR coreletd (8)

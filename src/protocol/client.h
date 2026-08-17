@@ -14,7 +14,7 @@ class QTimer;
 namespace proto {
 
 // Talks the MeshCore companion protocol over whatever link it is handed: a
-// umeshcored on TCP, or a device on BLE.
+// companion daemon on its Unix socket or on TCP, or a device on BLE.
 //
 // Two things shape this class. First, replies are untagged: nothing in a
 // response says which command it answers, so exactly one command may be in

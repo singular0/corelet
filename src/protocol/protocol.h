@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Companion protocol constants, mirroring umeshcore's src/companion/frames.h
+// Companion protocol constants, mirroring coreletd's src/companion/frames.h
 // (which in turn mirrors the upstream MeshCore firmware). These are wire
 // numbers: never renumber them, and only add at the end.
 namespace proto {

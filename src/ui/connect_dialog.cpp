@@ -2,6 +2,7 @@
 
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QIntValidator>
@@ -26,14 +27,24 @@
 namespace {
 
 // Tab order is stored as the remembered transport, so these are not just
-// positions.
-constexpr int TcpTab = 0;
-constexpr int BleTab = 1;
+// positions. The socket leads because it is what the daemon offers by default.
+constexpr int UnixTab = 0;
+constexpr int TcpTab = 1;
+constexpr int BleTab = 2;
 
 constexpr int ScanTimeoutMs = 12000;
 
 constexpr int IdRole = Qt::UserRole;
 constexpr int NameRole = Qt::UserRole + 1;
+
+int tabFor(proto::ConnectTarget::Kind kind) {
+    switch (kind) {
+        case proto::ConnectTarget::Kind::Unix: return UnixTab;
+        case proto::ConnectTarget::Kind::Ble: return BleTab;
+        case proto::ConnectTarget::Kind::Tcp: break;
+    }
+    return TcpTab;
+}
 
 }  // namespace
 
@@ -43,9 +54,10 @@ ConnectDialog::ConnectDialog(QWidget* parent) : QDialog(parent) {
     saved_ = lastTarget();
     buildUi();
 
+    socketPath_->setText(saved_.socketPath);
     host_->setText(saved_.host);
     port_->setText(QString::number(saved_.port));
-    tabs_->setCurrentIndex(saved_.kind == proto::ConnectTarget::Kind::Ble ? BleTab : TcpTab);
+    tabs_->setCurrentIndex(tabFor(saved_.kind));
     rebuildDeviceList();
     updateConnectButton();
 
@@ -56,6 +68,17 @@ ConnectDialog::~ConnectDialog() { stopScan(); }
 
 void ConnectDialog::buildUi() {
     tabs_ = new QTabWidget;
+
+    // --- unix socket --------------------------------------------------------
+    auto* unixTab = new QWidget;
+    auto* unixLayout = new QFormLayout(unixTab);
+    unixLayout->setContentsMargins(12, 10, 12, 10);
+    unixLayout->setSpacing(6);
+
+    socketPath_ = new QLineEdit;
+    socketPath_->setPlaceholderText(proto::ConnectTarget().socketPath);
+
+    unixLayout->addRow(QStringLiteral("Path"), socketPath_);
 
     // --- network ------------------------------------------------------------
     auto* tcpTab = new QWidget;
@@ -94,6 +117,7 @@ void ConnectDialog::buildUi() {
     bleLayout->addLayout(bleTop);
     bleLayout->addWidget(devices_, 1);
 
+    tabs_->addTab(unixTab, QStringLiteral("Socket"));
     tabs_->addTab(tcpTab, QStringLiteral("Network"));
     tabs_->addTab(bleTab, QStringLiteral("Bluetooth"));
 
@@ -112,6 +136,7 @@ void ConnectDialog::buildUi() {
     connect(devices_, &QListWidget::itemSelectionChanged, this,
             &ConnectDialog::updateConnectButton);
     connect(devices_, &QListWidget::itemDoubleClicked, this, &ConnectDialog::onAccepted);
+    connect(socketPath_, &QLineEdit::textChanged, this, &ConnectDialog::updateConnectButton);
     connect(host_, &QLineEdit::textChanged, this, &ConnectDialog::updateConnectButton);
     connect(port_, &QLineEdit::textChanged, this, &ConnectDialog::updateConnectButton);
     connect(buttons, &QDialogButtonBox::accepted, this, &ConnectDialog::onAccepted);
@@ -279,7 +304,21 @@ void ConnectDialog::updateConnectButton() {
         connectButton_->setEnabled(devices_->currentItem() != nullptr);
         return;
     }
+    if (tabs_->currentIndex() == UnixTab) {
+        // isValid() rejects a relative path, which Qt would resolve against the
+        // temporary directory: refuse it here rather than accepting a target
+        // that connects nowhere the user meant.
+        connectButton_->setEnabled(socketTarget().isValid());
+        return;
+    }
     connectButton_->setEnabled(!host_->text().trimmed().isEmpty() && port_->hasAcceptableInput());
+}
+
+proto::ConnectTarget ConnectDialog::socketTarget() const {
+    proto::ConnectTarget target;
+    target.kind = proto::ConnectTarget::Kind::Unix;
+    target.socketPath = socketPath_->text().trimmed();
+    return target;
 }
 
 void ConnectDialog::onAccepted() {
@@ -291,6 +330,9 @@ void ConnectDialog::onAccepted() {
         target.kind = proto::ConnectTarget::Kind::Ble;
         target.bleId = item->data(IdRole).toString();
         target.bleName = item->data(NameRole).toString();
+    } else if (tabs_->currentIndex() == UnixTab) {
+        target = socketTarget();
+        if (!target.isValid()) return;
     } else {
         if (!port_->hasAcceptableInput()) return;
         target.kind = proto::ConnectTarget::Kind::Tcp;
@@ -312,32 +354,51 @@ void ConnectDialog::onAccepted() {
 proto::ConnectTarget ConnectDialog::lastTarget() {
     QSettings settings;
     proto::ConnectTarget target;
-    target.kind = settings.value(QStringLiteral("connection/kind")).toString() ==
-                          QStringLiteral("ble")
-                      ? proto::ConnectTarget::Kind::Ble
-                      : proto::ConnectTarget::Kind::Tcp;
+    const QString kind = settings.value(QStringLiteral("connection/kind")).toString();
+    if (kind == QStringLiteral("ble"))
+        target.kind = proto::ConnectTarget::Kind::Ble;
+    else if (kind == QStringLiteral("unix"))
+        target.kind = proto::ConnectTarget::Kind::Unix;
+    else if (kind == QStringLiteral("tcp"))
+        target.kind = proto::ConnectTarget::Kind::Tcp;
+    else
+        // Nothing remembered, so guess from the machine: a daemon socket where
+        // the daemon puts one means this host runs the node, which is the whole
+        // uConsole case. Anything else lands on the loopback TCP default, which
+        // is what a Mac or a second machine wants.
+        target.kind = QFileInfo::exists(target.socketPath) ? proto::ConnectTarget::Kind::Unix
+                                                           : proto::ConnectTarget::Kind::Tcp;
+    target.socketPath =
+        settings.value(QStringLiteral("connection/socket"), target.socketPath).toString();
     target.host = settings.value(QStringLiteral("connection/host"), target.host).toString();
     target.port = quint16(settings.value(QStringLiteral("connection/port"), target.port).toUInt());
     target.bleId = settings.value(QStringLiteral("connection/bleId")).toString();
     target.bleName = settings.value(QStringLiteral("connection/bleName")).toString();
 
-    // A remembered BLE target with nothing to identify it is worse than no
-    // memory at all: it would open on a device that can never be found.
-    if (target.kind == proto::ConnectTarget::Kind::Ble && !target.isValid())
+    // A remembered target with nothing usable in it is worse than no memory at
+    // all: a BLE entry with no identity would open on a device that can never
+    // be found, and a relative socket path on nothing at all.
+    if (target.kind != proto::ConnectTarget::Kind::Tcp && !target.isValid())
         target.kind = proto::ConnectTarget::Kind::Tcp;
     return target;
 }
 
 void ConnectDialog::rememberTarget(const proto::ConnectTarget& target) {
     QSettings settings;
-    const bool ble = target.kind == proto::ConnectTarget::Kind::Ble;
-    settings.setValue(QStringLiteral("connection/kind"),
-                      ble ? QStringLiteral("ble") : QStringLiteral("tcp"));
-    if (ble) {
-        settings.setValue(QStringLiteral("connection/bleId"), target.bleId);
-        settings.setValue(QStringLiteral("connection/bleName"), target.bleName);
-    } else {
-        settings.setValue(QStringLiteral("connection/host"), target.host);
-        settings.setValue(QStringLiteral("connection/port"), target.port);
+    switch (target.kind) {
+        case proto::ConnectTarget::Kind::Ble:
+            settings.setValue(QStringLiteral("connection/kind"), QStringLiteral("ble"));
+            settings.setValue(QStringLiteral("connection/bleId"), target.bleId);
+            settings.setValue(QStringLiteral("connection/bleName"), target.bleName);
+            break;
+        case proto::ConnectTarget::Kind::Unix:
+            settings.setValue(QStringLiteral("connection/kind"), QStringLiteral("unix"));
+            settings.setValue(QStringLiteral("connection/socket"), target.socketPath);
+            break;
+        case proto::ConnectTarget::Kind::Tcp:
+            settings.setValue(QStringLiteral("connection/kind"), QStringLiteral("tcp"));
+            settings.setValue(QStringLiteral("connection/host"), target.host);
+            settings.setValue(QStringLiteral("connection/port"), target.port);
+            break;
     }
 }

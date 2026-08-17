@@ -9,11 +9,11 @@ namespace proto {
 // The link the companion protocol runs over.
 //
 // The protocol itself is identical on every link; what differs is where a frame
-// ends. TCP is a byte stream, so frames carry the length prefix and have to be
-// de-framed incrementally. BLE is already message-oriented: one GATT packet is
-// exactly one frame, prefix and all resynchronisation logic unnecessary. Hiding
-// that behind this interface is what keeps CompanionClient from growing a
-// transport switch in every method.
+// ends. TCP and a Unix socket are byte streams, so frames carry the length
+// prefix and have to be de-framed incrementally. BLE is already
+// message-oriented: one GATT packet is exactly one frame, prefix and all
+// resynchronisation logic unnecessary. Hiding that behind this interface is what
+// keeps CompanionClient from growing a transport switch in every method.
 class Transport : public QObject {
     Q_OBJECT
 
@@ -46,9 +46,16 @@ Q_SIGNALS:
 // Where to connect, as chosen on the command line or in the connect dialog and
 // remembered between runs.
 struct ConnectTarget {
-    enum class Kind { Tcp, Ble };
+    enum class Kind { Unix, Tcp, Ble };
 
     Kind kind = Kind::Tcp;
+
+    // The daemon's own default endpoint, and the one it prefers: a Unix socket
+    // is reachable only by the users its group and mode allow, where a port is
+    // open to whatever can route to it. The path has to be absolute — Qt
+    // resolves a bare name against the temporary directory rather than the
+    // working one, so a relative path would quietly connect somewhere else.
+    QString socketPath = QStringLiteral("/run/coreletd/companion.sock");
 
     // The daemon binds loopback by default and the protocol has no
     // authentication, so a local default is the only safe one.

@@ -31,6 +31,14 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addVersionOption();
 
+    // The endpoint the daemon offers unless it is told otherwise. Its default
+    // path is carried by ConnectTarget so the dialog and the command line
+    // cannot disagree about it.
+    const proto::ConnectTarget defaults;
+    QCommandLineOption socketOption(
+        {QStringLiteral("s"), QStringLiteral("socket")},
+        QStringLiteral("MeshCore daemon Unix socket (default %1)").arg(defaults.socketPath),
+        QStringLiteral("path"), defaults.socketPath);
     // The daemon binds loopback by default, and its protocol has no
     // authentication, so a local default is the only safe one.
     QCommandLineOption hostOption({QStringLiteral("H"), QStringLiteral("host")},
@@ -44,6 +52,7 @@ int main(int argc, char** argv) {
         QStringLiteral("MeshCore device to reach over Bluetooth LE, by advertised name "
                        "or by the address this machine knows it as"),
         QStringLiteral("device"));
+    parser.addOption(socketOption);
     parser.addOption(hostOption);
     parser.addOption(portOption);
     parser.addOption(bleOption);
@@ -56,15 +65,33 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Three ways to name one node, and no sensible precedence between them: say
+    // so rather than silently honouring whichever the code happens to test
+    // first.
+    const bool wantsSocket = parser.isSet(socketOption);
+    const bool wantsTcp = parser.isSet(hostOption) || parser.isSet(portOption);
+    const bool wantsBle = parser.isSet(bleOption);
+    if (int(wantsSocket) + int(wantsTcp) + int(wantsBle) > 1) {
+        qCritical("name one target: --socket, --host/--port or --ble");
+        return 2;
+    }
+
     theme::apply(app);
 
     // Naming a target on the command line skips the dialog: the app is launched
     // that way from the desktop file and from scripts, and both want to come up
     // connected rather than waiting on a click.
     proto::ConnectTarget target;
-    if (parser.isSet(bleOption)) {
+    if (wantsBle) {
         target = proto::bleTarget(parser.value(bleOption));
-    } else if (parser.isSet(hostOption) || parser.isSet(portOption)) {
+    } else if (wantsSocket) {
+        target.kind = proto::ConnectTarget::Kind::Unix;
+        target.socketPath = parser.value(socketOption);
+        if (!target.isValid()) {
+            qCritical("socket path must be absolute: %s", qPrintable(target.socketPath));
+            return 2;
+        }
+    } else if (wantsTcp) {
         target.host = parser.value(hostOption);
         target.port = quint16(port);
     } else {

@@ -8,7 +8,7 @@
 
 namespace proto {
 
-// Incremental de-framer for the TCP byte stream. Resynchronises by discarding
+// Incremental de-framer for a byte-stream link. Resynchronises by discarding
 // bytes until a start marker appears: a daemon restart or a half-open socket
 // can leave us mid-frame, and stalling forever is worse than dropping junk.
 class FrameReader {

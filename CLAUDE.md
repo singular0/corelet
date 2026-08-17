@@ -157,8 +157,9 @@ Combined with the rule above, there is essentially no reason to run the binary u
 maintainer asks for a run, back up the affected device database first.
 
 ```sh
-./build/corelet --host 10.0.0.4 --port 5099   # skips the connect dialog
-./build/corelet --ble MeshCore-3f2a          # advertised name, or an adapter handle
+./build/corelet --socket /run/coreletd/companion.sock   # skips the connect dialog
+./build/corelet --host 10.0.0.4 --port 5099
+./build/corelet --ble MeshCore-3f2a                    # advertised name, or an adapter handle
 ```
 
 ## Architecture
@@ -174,8 +175,8 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
   (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
   `debian/copyright`, which are what the README's license section points at).
 
-This is a client only. All radio work, crypto and channel state live in `umeshcored`
-(`../umeshcore`) or the device firmware.
+This is a client only. All radio work, crypto and channel state live in `coreletd`
+(`../coreletd`) or the device firmware.
 
 ### Constraints that shape the protocol layer
 
@@ -200,9 +201,17 @@ Violating any of these produces bugs that only show up against a real device:
   any name. Never treat `Message::sender` as identity.
 - **Our own sends never come back over the air** — they are echoed locally in
   `MainWindow::onSendResult` when the daemon acknowledges.
-- **Only framing differs between links.** `Transport` hides it: TCP length-prefixes and de-frames
-  incrementally, BLE is one Nordic UART write/notification per frame. Everything above `Transport`
-  is link-agnostic; don't add transport branches to `CompanionClient`.
+- **Only framing differs between links.** `Transport` hides it: the two stream links length-prefix
+  and de-frame incrementally, BLE is one Nordic UART write/notification per frame. Everything above
+  `Transport` is link-agnostic; don't add transport branches to `CompanionClient`.
+- **The Unix socket is the daemon's default endpoint**, TCP its opt-in, and the two carry the same
+  length-prefixed stream. `StreamTransport` holds all of it — the `FrameReader`, the send path and
+  the one-`closed()`-per-`open()` guard — and `TcpTransport`/`UnixTransport` supply only the three
+  verbs `QTcpSocket` and `QLocalSocket` spell differently, since those classes share no base past
+  `QIODevice`. A socket path must be absolute: Qt resolves a bare name against the temporary
+  directory, so `ConnectTarget::isValid` rejects a relative one rather than letting it connect
+  somewhere the user never named. With nothing remembered, `ConnectDialog::lastTarget` opens on the
+  socket when one exists at the daemon's default path and on loopback TCP otherwise.
 - **BLE is the Nordic UART service** — `6e400001-...`, writing `...0002` and subscribing `...0003`.
   A device handle is whatever the local adapter gives it, an address under BlueZ and an opaque
   per-host UUID under CoreBluetooth, so the advertised name is stored alongside it and used to

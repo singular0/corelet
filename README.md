@@ -3,7 +3,7 @@
 A lightweight, cross-platform desktop companion app for [MeshCore](https://meshcore.co.uk) — a
 chat window for your mesh node.
 
-It reaches your node one of two ways: over Bluetooth LE straight to the device, or over TCP to a
+It reaches your node over Bluetooth LE straight to the device, or over a Unix socket or TCP to a
 companion daemon. Either way it lists the node's channels, shows their history and sends and
 receives messages on them.
 
@@ -43,7 +43,8 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 
 **Connection**
 
-- [x] Bluetooth LE to a device, or TCP to a daemon, remembered after the first launch.
+- [x] Bluetooth LE to a device, or a Unix socket or TCP to a daemon, remembered after the first
+      launch.
 - [x] Reconnects on its own when the link drops.
 - [x] Stays readable from a local cache while the node is unreachable.
 
@@ -102,31 +103,38 @@ come back, or the permission may appear stuck as denied. Deleting Corelet's entr
 
 ## Running
 
-Started with no arguments, Corelet asks what to connect to — a host and port, or a device picked
-from a Bluetooth scan — and remembers the answer. The connection button in the node pane
-disconnects or points it somewhere else.
+Started with no arguments, Corelet asks what to connect to — the daemon's socket, a host and port,
+or a device picked from a Bluetooth scan — and remembers the answer. The connection button in the
+node pane disconnects or points it somewhere else.
 
 Naming a target on the command line skips that dialog:
 
 ```sh
 corelet --ble MeshCore-3f2a          # advertised name, or an address
+corelet --socket /run/coreletd/companion.sock
 corelet --host 10.0.0.4 --port 5099
 ```
 
 | Option | Meaning |
 |--------|---------|
 | `-b`, `--ble <device>` | Reach a MeshCore device over Bluetooth LE, by advertised name or by the address this machine knows it as. |
+| `-s`, `--socket <path>` | Unix socket the daemon listens on, matching its `companion_socket`. Must be absolute. Default `/run/coreletd/companion.sock`. |
 | `-H`, `--host <host>` | Host running the MeshCore daemon. Default `127.0.0.1`. |
 | `-p`, `--port <port>` | Companion port on that host, matching the daemon's `companion_port`. Default `5000`. |
 | `-h`, `--help` | Usage summary. |
 | `-v`, `--version` | Version. |
 
+Name one target, not several: `--socket`, `--host`/`--port` and `--ble` are alternatives.
+
 `man corelet` has the same reference on Linux.
 
-Two things to expect. Over BLE, the device has to be in range and not already connected to
-something else — MeshCore firmware serves one companion app at a time. Over TCP, note that the
-companion protocol has **no authentication whatsoever**: the daemon listens on loopback for that
-reason, and you should only point Corelet across a network you control.
+Three things to expect. Over BLE, the device has to be in range and not already connected to
+something else — MeshCore firmware serves one companion app at a time. Over a Unix socket, access
+is decided by the socket's group, so `permission denied` means your user is not in it
+(`sudo adduser "$USER" coreletd`, then log out and back in). And note that the companion protocol
+has **no authentication whatsoever**: the socket's permissions are the only access control there
+is, the daemon listens on loopback when it is put on TCP instead, and you should only point Corelet
+across a network you control.
 
 ## Troubleshooting
 
