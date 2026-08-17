@@ -123,6 +123,10 @@ void CompanionClient::resetConnection() {
     dropped.swap(queue_);
     inFlight_ = false;
     syncPending_ = false;
+    // Each session preflights its own storage: the endpoint may now be serving
+    // a different radio, and that device's database is a different file which
+    // may or may not open.
+    storageAvailable_ = false;
     channelsOutstanding_ = 0;
     replyTimer_->stop();
     batteryTimer_->stop();
@@ -495,7 +499,19 @@ void CompanionClient::readBackChannel(int index, bool cleared) {
 // Messages
 // ---------------------------------------------------------------------------
 
+void CompanionClient::setStorageAvailable(bool available) {
+    if (storageAvailable_ == available) return;
+    storageAvailable_ = available;
+    // Whatever the drain stopped on is still sitting in the daemon's inbox, so
+    // there is a backlog to pick up the moment there is somewhere to put it.
+    if (available && state_ == State::Ready) requestSync();
+}
+
 void CompanionClient::requestSync() {
+    // Asking pops the message off the node, so this is the one command that is
+    // not safe to send speculatively: with nowhere to write the answer down,
+    // sending it is how messages get destroyed.
+    if (!storageAvailable_) return;
     if (syncPending_) return;
     syncPending_ = true;
 
@@ -522,6 +538,9 @@ void CompanionClient::requestSync() {
 
             // Drain: the daemon pushes MSG_WAITING once per message, but a
             // backlog collected at connect time has no pushes left to trigger.
+            // Both signals above are delivered directly, so the message is
+            // either written down or storage has been turned off by the time
+            // this runs -- which is what makes it safe to ask for the next one.
             requestSync();
         }
         // RESP_NO_MORE_MESSAGES (or an error) ends the drain.

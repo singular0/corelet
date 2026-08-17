@@ -84,6 +84,18 @@ public:
     // channel is unrecoverable without a copy of it.
     void clearChannel(int channelIndex);
 
+    // Gates inbox collection on the app having somewhere to put what it
+    // collects. SYNC_NEXT_MESSAGE pops the message out of the daemon's inbox,
+    // so a drain that runs ahead of storage destroys messages; with this off,
+    // the backlog simply stays where it is until it can be written down.
+    //
+    // The owner must preflight its storage and set this before the handshake
+    // finishes, and turn it off from inside messageReceived/directMessageReceived
+    // when a write fails -- those are delivered directly, so the answer is in
+    // hand before the next message is asked for. Turning it back on while the
+    // link is up resumes the drain.
+    void setStorageAvailable(bool available);
+
 Q_SIGNALS:
     void stateChanged(State state, const QString& detail);
     void deviceInfoChanged(const DeviceInfo& info);
@@ -157,6 +169,9 @@ private:
     // Guards against stacking a sync per push: one drain loop is enough, and
     // the daemon pushes MSG_WAITING once per stored message.
     bool syncPending_ = false;
+    // Off until the owner says otherwise, and off again on every reconnect, so
+    // a session that never preflights its storage never pops a message.
+    bool storageAvailable_ = false;
 
     State state_ = State::Disconnected;
     DeviceInfo device_;

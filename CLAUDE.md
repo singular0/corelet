@@ -189,7 +189,13 @@ Violating any of these produces bugs that only show up against a real device:
   queue is consulted. `PUSH_MSG_WAITING` is what triggers message collection.
 - **`SYNC_NEXT_MESSAGE` pops** from the daemon's inbox. The daemon is not storage; whatever the app
   collects it must persist to the device database or the message is gone. This includes direct messages,
-  which have no view yet but are still stored under channel `-1`.
+  which have no view yet but are still stored under channel `-1`. Because the pop is destructive, the
+  drain is gated on storage: `CompanionClient::setStorageAvailable` must be true before the first
+  sync, `MainWindow::preflightStorage` sets it from a real open of the device database on
+  `deviceInfoChanged`, and any `History` failure turns it back off. Both message signals are
+  delivered directly, which is what makes the client's post-emit `requestSync()` a "the previous
+  one committed" check rather than a hope. Nothing collected is lost by stopping — an uncollected
+  message stays in the daemon's inbox — so never make the drain unconditional again.
 - **A channel's slot number is only its current wire address**, never its persistent identity or
   row. `GET_CHANNEL` answers for all 8 slots and unused ones have an all-zero key; slots are sparse,
   and rows shift on re-enumeration. Persistent state uses a fingerprint of the channel key.
@@ -224,6 +230,23 @@ Violating any of these produces bugs that only show up against a real device:
 - `history/<public-key>.sqlite3` under `QStandardPaths::AppDataLocation` — one SQLite database per
   device, capped at `History::MaxPerChannel` (500) messages per channel. Rows are indexed by a
   SHA-256 fingerprint of the channel key; the device identity is carried by the filename.
+  Every operation returns a `HistoryResult` and a read returns it beside the rows, because an
+  unreadable database and an empty one otherwise look identical and the difference is somebody's
+  whole message history.
+- WAL with `synchronous = NORMAL`. This was weighed against `FULL` and kept: in WAL mode `NORMAL`
+  already survives the app being killed, crashing or torn down mid-write, because the WAL sits in
+  the OS page cache and the kernel outlives the process, and WAL cannot corrupt the database the way
+  a rollback journal at `NORMAL` can. Only a battery pull or a kernel panic within seconds of a
+  commit loses anything, and `FULL` buys that back at one SD-card fsync per received message, on the
+  write path of a backlog drain. Don't switch it without a measurement on the CM4. `PRAGMA
+  user_version` is set on open purely as a *write*, so a read-only file or a full card fails the
+  preflight rather than the first message.
+- A message the app cannot place — no device identity yet, or a channel whose key is not in hand —
+  goes to `History::orphanDeviceId()` / `History::orphanChannel(slot)` rather than being dropped:
+  the node has already discarded its copy. Both are near-all-zero and so unreachable by a real
+  32-byte public key or a real SHA-256 fingerprint, and the orphan conversation keeps the wire slot
+  in its last byte, which is the only clue left if the key turns up later. Nothing reads these back
+  yet (see the DM view, same situation).
 - `QSettings` (org `singular0`, app `corelet`) holds global `geometry`, `splitter` and the
   `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
   below that are keyed by channel-key fingerprint and the selected channel is stored by the same

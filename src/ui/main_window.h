@@ -82,6 +82,20 @@ private:
     // why this is not a permanent strip.
     void showNotice(const QString& text, int ms, bool error = false);
     void hideNotice();
+    // Storage failure is not a passing word: history is the only copy of a
+    // collected message, so this holds the notice line until storage answers
+    // again. A transient notice only borrows the line and gives it back.
+    void setStorageFault(const QString& text);
+    void clearStorageFault();
+
+    // Opens this device's database and tells the client whether collecting
+    // messages is safe. Runs before the handshake completes, which is before
+    // the client sends its first SYNC_NEXT_MESSAGE.
+    void preflightStorage();
+    // A history failure is data loss in progress -- collection has already
+    // taken the message off the node -- so it stops the drain as well as
+    // saying so. `action` completes "Could not ...".
+    void onStorageFailure(const QString& action, const model::HistoryResult& result);
 
     proto::CompanionClient* client_ = nullptr;
     proto::ConnectTarget target_;
@@ -109,6 +123,12 @@ private:
     QLabel* charCount_ = nullptr;
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;
+    // Non-empty while storage is unusable, which is also while the inbox drain
+    // is stopped. Cleared by a preflight that succeeds.
+    QString storageFault_;
+    // One preflight per handshake. Reset whenever the link leaves Ready, which
+    // is the only thing that gives storage another chance.
+    bool storagePreflighted_ = false;
 
     // Current daemon slot number of the open conversation, or -1 for none. It
     // is only a wire address; persistent selection follows the channel key.
