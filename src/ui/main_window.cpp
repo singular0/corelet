@@ -253,12 +253,10 @@ void MainWindow::showAddChannelMenu() {
                                 QStringLiteral("Join a Hashtag Channel"));
 
     // There is exactly one public channel and its key is a constant, so joining
-    // it twice is not a thing to do; the item stays visible to say the device
-    // already has it.
-    if (AddChannelDialog::publicChannelJoined(existing)) {
-        joinPublic->setEnabled(false);
-        joinPublic->setText(QStringLiteral("Join the Public Channel (already joined)"));
-    }
+    // it twice is not a thing to do. The item stays in place rather than
+    // disappearing, so the menu keeps the same four items in the same order
+    // whatever the device holds.
+    joinPublic->setEnabled(!AddChannelDialog::publicChannelJoined(existing));
 
     QAction* chosen =
         menu.exec(addChannelButton_->mapToGlobal(QPoint(0, addChannelButton_->height())));
