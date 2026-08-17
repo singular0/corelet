@@ -93,8 +93,8 @@ bool isZero(const QByteArray& secret) {
 
 // The channel name a typed hashtag amounts to, or empty when it does not name
 // one yet. The '#' is part of the hashed name -- a tag typed without one would
-// otherwise derive a different key than everyone else's -- so it is also a byte
-// of the 32 the name field has, which is why the counter goes through here too.
+// otherwise derive a different key than everyone else's -- and so also a byte of
+// the 32 the name field holds, which is why the field's counter reserves one.
 QString hashtagName(const QString& typed) {
     QString tag = typed.trimmed();
     if (!tag.startsWith(QLatin1Char('#'))) tag.prepend(QLatin1Char('#'));
@@ -120,7 +120,6 @@ AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWid
     setWindowTitle(QStringLiteral("Add channel"));
     buildUi();
     regenerateKey();
-    updateCounters();
     updateOkButton();
 }
 
@@ -142,11 +141,12 @@ void AddChannelDialog::buildUi() {
     // No setMaxLength on any of the three name fields: the wire limit is 32
     // encoded bytes, which QLineEdit cannot express -- it counts characters, and
     // a name in Cyrillic or with an emoji in it runs out of field long before it
-    // runs out of characters. updateOkButton() checks the real thing, and the
-    // counter beside each field is what makes the limit visible before then.
+    // runs out of characters. Each field's counter caps it in the right unit and
+    // shows what is left while it does.
     createName_ = new QLineEdit;
     createName_->setPlaceholderText(QStringLiteral("Kitchen table"));
     createNameCount_ = new ByteCounter;
+    createNameCount_->attach(createName_, proto::MaxChannelNameBytes);
 
     createKey_ = new QLineEdit;
     createKey_->setReadOnly(true);
@@ -189,6 +189,7 @@ void AddChannelDialog::buildUi() {
     joinName_ = new QLineEdit;
     joinName_->setPlaceholderText(QStringLiteral("Kitchen table"));
     joinNameCount_ = new ByteCounter;
+    joinNameCount_->attach(joinName_, proto::MaxChannelNameBytes);
 
     // No counter on the key: it is an exact size rather than a budget, and a
     // key that is the wrong length is not nearly there, it is the wrong key.
@@ -223,6 +224,12 @@ void AddChannelDialog::buildUi() {
     hashtag_ = new QLineEdit;
     hashtag_->setPlaceholderText(QStringLiteral("#jokes"));
     hashtagCount_ = new ByteCounter;
+    // One byte short of the field: the '#' this dialog puts in front of a tag
+    // typed without one is part of the name that reaches the slot, and reserving
+    // it always beats a budget that moves by a byte as the user types. Someone
+    // who types their own '#' is out a byte of a 32-byte name, which no one will
+    // ever meet.
+    hashtagCount_->attach(hashtag_, proto::MaxChannelNameBytes - 1);
 
     auto* hashtagRow = new QHBoxLayout;
     hashtagRow->setSpacing(6);
@@ -261,11 +268,10 @@ void AddChannelDialog::buildUi() {
         hashtagCount_->setEnabled(!on);
         updateOkButton();
     });
+    // Connected after each counter's own, so this reads fields already held
+    // inside their budgets.
     for (QLineEdit* field : {createName_, joinName_, joinKey_, hashtag_})
-        connect(field, &QLineEdit::textChanged, this, [this] {
-            updateCounters();
-            updateOkButton();
-        });
+        connect(field, &QLineEdit::textChanged, this, [this] { updateOkButton(); });
     connect(buttons, &QDialogButtonBox::accepted, this, &AddChannelDialog::onAccepted);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -312,17 +318,6 @@ model::Channel AddChannelDialog::currentChannel() const {
     return ch;
 }
 
-void AddChannelDialog::updateCounters() {
-    // Counted after trimming, and with the hashtag's '#' included, because that
-    // is the name that would be written to the slot.
-    createNameCount_->setUsed(proto::utf8Bytes(createName_->text().trimmed()),
-                              proto::MaxChannelNameBytes);
-    joinNameCount_->setUsed(proto::utf8Bytes(joinName_->text().trimmed()),
-                            proto::MaxChannelNameBytes);
-    hashtagCount_->setUsed(proto::utf8Bytes(hashtagName(hashtag_->text())),
-                           proto::MaxChannelNameBytes);
-}
-
 void AddChannelDialog::updateOkButton() {
     const model::Channel ch = currentChannel();
 
@@ -342,19 +337,11 @@ void AddChannelDialog::updateOkButton() {
         return;
     }
 
-    // The name goes into a fixed 32-byte field, and a hashtag carries the '#'
-    // this dialog adds for the user, so it is the assembled name that has to
-    // fit. Say how far over it is rather than cutting it, which for anything
-    // but ASCII could land in the middle of a character.
-    const int nameBytes = proto::utf8Bytes(ch.name);
-    if (nameBytes > proto::MaxChannelNameBytes) {
-        setError(QStringLiteral("That name needs %1 bytes and the field holds %2.")
-                     .arg(nameBytes)
-                     .arg(proto::MaxChannelNameBytes));
-        addButton_->setEnabled(false);
-        return;
-    }
-
+    // Nothing checks the name's length here: every field it can come from is
+    // capped at the 32-byte wire field by its counter, with the hashtag's '#'
+    // reserved out of the same 32. CompanionClient::setChannel refuses an
+    // over-long name in any case, which is where a caller that is not this
+    // dialog would find out.
     if (isZero(ch.secret)) {
         // An all-zero key is how SET_CHANNEL clears a slot, so it would delete
         // rather than join.

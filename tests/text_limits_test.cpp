@@ -90,5 +90,61 @@ int main() {
                "an emoji past the field is four bytes over"))
         return 1;
 
+    // --- clamping keeps what fits and cuts between characters ---------------
+    const auto clamp = proto::clampToUtf8Bytes;
+    if (!check(clamp(QStringLiteral("hello"), 5) == QStringLiteral("hello"),
+               "text at the budget is left alone") ||
+        !check(clamp(QStringLiteral("hello"), 99) == QStringLiteral("hello"),
+               "so is text well inside it") ||
+        !check(clamp(QStringLiteral("hello"), 3) == QStringLiteral("hel"), "ASCII cuts per byte") ||
+        !check(clamp(QStringLiteral("hello"), 0).isEmpty(), "no budget keeps nothing") ||
+        !check(clamp(QStringLiteral("hello"), -4).isEmpty(), "nor does a negative one"))
+        return 1;
+
+    // A cut inside a character would leave bytes that decode to nothing, so the
+    // last character that does not fit whole comes out entirely.
+    if (!check(clamp(QString::fromUtf8("привет"), 5) == QString::fromUtf8("пр"),
+               "an odd budget cannot hold half a two-byte letter") ||
+        !check(clamp(QString::fromUtf8("日本語"), 8) == QString::fromUtf8("日本"),
+               "nor two thirds of a three-byte one") ||
+        !check(clamp(QString::fromUtf8("日本語"), 9) == QString::fromUtf8("日本語"),
+               "and an exact fit keeps all three"))
+        return 1;
+
+    // The emoji case is the one that would corrupt rather than truncate: half a
+    // surrogate pair is not a character at all.
+    const QString twoEmoji = QString::fromUtf8("👋👋");
+    if (!check(clamp(twoEmoji, 7) == QString::fromUtf8("👋"), "seven bytes hold one emoji") ||
+        !check(clamp(twoEmoji, 7).size() == 2, "kept whole, as both of its code units") ||
+        !check(clamp(twoEmoji, 3).isEmpty(), "and three bytes hold none of one") ||
+        !check(clamp(twoEmoji, 8) == twoEmoji, "eight hold both"))
+        return 1;
+
+    // Stepping back by grapheme rather than by code unit, so an accent is never
+    // separated from the letter it belongs to.
+    // Spelled out rather than written literally: this has to be "e" followed by
+    // a combining acute, not the single precomposed character that looks the
+    // same, which an editor or a filesystem will quietly swap one for.
+    const QString accented = QStringLiteral("ae") + QChar(0x0301);
+    if (!check(proto::utf8Bytes(accented) == 4, "a combining accent costs two bytes") ||
+        !check(clamp(accented, 4) == accented, "the pair fits at four") ||
+        !check(clamp(accented, 3) == QStringLiteral("a"),
+               "and at three the letter goes with its accent"))
+        return 1;
+
+    // What the input fields rely on: whatever comes back fits, every time, so
+    // there is never a count left to show as a negative number.
+    for (const int limit : {0, 1, 2, 3, 7, 16, 31, 169}) {
+        for (const QString& text : {QStringLiteral("plain ASCII text"),
+                                    QString::fromUtf8("привет, мир"),
+                                    QString::fromUtf8("👋👋👋"), accented, QString()}) {
+            if (!check(proto::utf8Bytes(clamp(text, limit)) <= limit,
+                       "a clamped string is within its budget") ||
+                !check(clamp(text, limit) == clamp(clamp(text, limit), limit),
+                       "and clamping it again changes nothing"))
+                return 1;
+        }
+    }
+
     return 0;
 }

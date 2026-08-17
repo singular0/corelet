@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QTextBoundaryFinder>
 
 #include "protocol/protocol.h"
 
@@ -40,6 +41,29 @@ inline int utf8Bytes(const QString& text) { return int(text.toUtf8().size()); }
 // without a second bounds check.
 inline int maxMessageBytes(const QString& senderName) {
     return qMax(0, MaxChannelTextBytes - SenderSeparatorBytes - utf8Bytes(senderName));
+}
+
+// The longest leading part of `text` that fits `budget` encoded bytes. The cut
+// falls between grapheme clusters, not between bytes and not even between
+// QString characters: cutting the UTF-8 would leave bytes that are not a
+// character at all, and cutting between code units would leave half of a
+// surrogate pair or an accent without the letter it belongs to.
+inline QString clampToUtf8Bytes(const QString& text, int budget) {
+    if (budget <= 0) return {};
+    if (utf8Bytes(text) <= budget) return text;
+
+    // No character encodes to less than a byte per code unit, so this many code
+    // units is already an upper bound -- and it keeps the walk below off the
+    // whole of a long paste. Where it splits a character the walk repairs it.
+    const QString head = text.left(budget);
+    QTextBoundaryFinder boundary(QTextBoundaryFinder::Grapheme, head);
+    int end = head.size();
+    while (end > 0 && utf8Bytes(head.left(end)) > budget) {
+        boundary.setPosition(end);
+        end = boundary.toPreviousBoundary();
+        if (end < 0) return {};
+    }
+    return head.left(end);
 }
 
 }  // namespace proto

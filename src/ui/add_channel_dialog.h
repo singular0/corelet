@@ -43,9 +43,6 @@ private:
     void buildUi();
     void regenerateKey();
     void updateOkButton();
-    // Room left in each tab's name field. All three write the same fixed 32-byte
-    // wire field, so they share a budget and differ only in what they put in it.
-    void updateCounters();
     void setError(const QString& text);
     // The channel the current tab describes, or an empty name/key when what is
     // typed is not usable yet.

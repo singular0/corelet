@@ -391,11 +391,10 @@ void MainWindow::buildUi() {
 
     input_ = new QLineEdit;
     input_->setPlaceholderText(QStringLiteral("Message"));
-    // No maximum length: the limit is a byte budget rather than a character
-    // count (see protocol/text_limits.h), and QLineEdit can only cap characters
-    // -- which would either cut a pasted message short or stop typing well
-    // before the real limit. Over-long text stays in the box with the counter
-    // negative and Send disabled, so nothing anyone typed is thrown away.
+    // No setMaxLength: the limit is a byte budget rather than a character count,
+    // and the counter below enforces it. What fits depends on the node's name,
+    // which is not known yet, so it starts on the budget of a nameless node and
+    // is corrected when SELF_INFO answers.
 
     const int sendIconSize = theme::scaled(input_->font(), 16);
     QIcon sendIcon;
@@ -411,6 +410,7 @@ void MainWindow::buildUi() {
     sendAction_->setToolTip(QStringLiteral("Send message"));
 
     charCount_ = new ByteCounter;
+    charCount_->attach(input_, proto::maxMessageBytes(client_->device().name));
     const QFont countFont = theme::secondaryFont(font());
 
     inputLayout->addWidget(input_);
@@ -457,11 +457,12 @@ void MainWindow::buildUi() {
             &MainWindow::onChannelSelected);
     connect(sendAction_, &QAction::triggered, this, &MainWindow::onSendClicked);
     connect(input_, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
-    connect(input_, &QLineEdit::textChanged, this, [this] { updateMessageBudget(); });
+    // Connected after the counter's own, so this reads a field already held
+    // inside its budget. All it decides is whether there is anything to send.
+    connect(input_, &QLineEdit::textChanged, this, [this] { updateInputState(); });
 
     // The uConsole panel is 1280x480; this is a sane default anywhere else.
     resize(1024, 480);
-    updateMessageBudget();
     updateInputState();
     updateChannelActions();
     updateHeader();
@@ -939,18 +940,11 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
         appendToView(msg);
 }
 
-// Bytes left in the message the box currently holds, which may be negative.
-// Measured over the trimmed text because that is what onSendClicked() sends, so
-// the counter and the send agree about what fits; and in encoded bytes rather
-// than characters, because that is what the radio carries.
-int MainWindow::messageBytesLeft() const {
-    return proto::maxMessageBytes(client_->device().name) -
-           proto::utf8Bytes(input_->text().trimmed());
-}
-
+// The node prepends its own name to every channel message it sends, so what is
+// left for the body moves with that name: connecting, or moving to a node called
+// something else, is what makes this a budget rather than a constant.
 void MainWindow::updateMessageBudget() {
-    charCount_->setUsed(proto::utf8Bytes(input_->text().trimmed()),
-                        proto::maxMessageBytes(client_->device().name));
+    charCount_->setBudget(proto::maxMessageBytes(client_->device().name));
     updateInputState();
 }
 
@@ -959,8 +953,9 @@ void MainWindow::updateInputState() {
     const bool canType = ready && currentChannel_ >= 0;
     const bool becameAvailable = canType && !input_->isEnabled();
     input_->setEnabled(canType);
-    sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty() &&
-                            messageBytesLeft() >= 0);
+    // No length test: the counter holds the box inside the budget, so whatever
+    // is in it fits.
+    sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty());
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
                                : ready ? QStringLiteral("Select a channel")
                                        : QStringLiteral("Waiting for a connection..."));

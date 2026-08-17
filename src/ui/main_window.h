@@ -71,13 +71,9 @@ private:
     // selected or the link is down, which is also when nothing can be done to it.
     std::optional<model::Channel> currentChannelOnDevice() const;
     void appendToView(const model::Message& msg);
-    // Room left in the message being typed, in encoded bytes and negative when
-    // it is over. What fits depends on the node's own name, which it prepends to
-    // every channel message, so this cannot be a constant.
-    int messageBytesLeft() const;
-    // Repaints the byte counter and, through updateInputState(), decides whether
-    // the message can go. Driven by editing and by the node name arriving, since
-    // both move the budget.
+    // Hands the message box's byte counter the budget the current node leaves
+    // for a message body. Driven by the node name arriving or changing; ordinary
+    // editing needs nothing, the counter follows the field itself.
     void updateMessageBudget();
     void updateInputState();
     // Adding and removing a channel are both writes to the device, so they need

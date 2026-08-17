@@ -1,50 +1,39 @@
 #pragma once
 
 #include <QColor>
-#include <QFontMetrics>
 #include <QLabel>
-#include <QString>
 
-#include "ui/theme.h"
+class QLineEdit;
 
-// The "room left" readout beside a field whose limit is a byte budget rather
-// than a character count -- which is every field that reaches the wire, see
-// protocol/text_limits.h. Without one the limit is invisible until the app
-// refuses to send, and a character count would be the wrong number anyway: the
-// same box holds 32 Latin letters or 8 emoji.
+// The byte budget of a text field, made visible and kept true: it shows the room
+// left and holds the field inside it, so the count is never asked to show a
+// negative number. Every field that reaches the wire has one, because the limit
+// is encoded bytes (see protocol/text_limits.h) and QLineEdit::setMaxLength --
+// the only cap it has -- counts characters, which is a different number: the
+// same 32-byte field holds 32 Latin letters, 16 Cyrillic ones or 8 emoji.
 class ByteCounter : public QLabel {
 public:
-    explicit ByteCounter(QWidget* parent = nullptr) : QLabel(parent) {
-        setFont(theme::secondaryFont(font()));
-        setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        // Fixed rather than hinted from the text: the width would otherwise
-        // change with every digit and shove whatever shares the row with it.
-        // Sized for the widest thing it can say -- a three-digit budget, an
-        // over-budget minus sign and all.
-        setFixedWidth(fontMetrics().horizontalAdvance(QStringLiteral("-000/000")));
-    }
+    explicit ByteCounter(QWidget* parent = nullptr);
 
-    // Both arguments are byte counts. Going over is shown rather than clamped:
-    // how far over is what says how much has to come back out.
-    void setUsed(int used, int budget) {
-        constexpr int WarningThreshold = 10;
-        const int left = budget - used;
-        setText(QStringLiteral("%1/%2").arg(left).arg(budget));
+    // Takes charge of `field`. What is typed or pasted past `budget` bytes is
+    // dropped, exactly as setMaxLength drops what is past its character count.
+    void attach(QLineEdit* field, int budget);
 
-        const QColor color = left < 0                   ? theme::Error
-                             : left <= WarningThreshold ? theme::Warning
-                                                        : theme::TextMuted;
-        // A stylesheet assignment re-polishes the widget, and this runs on
-        // every keystroke, so only say it when the colour actually changed. The
-        // disabled rule goes with it: a stylesheet colour otherwise outranks the
-        // palette, and a counter left glowing red beside a field the user has
-        // just switched away from is saying something about nothing.
-        if (color == color_) return;
-        color_ = color;
-        setStyleSheet(QStringLiteral("QLabel { color: %1; } QLabel:disabled { color: %2; }")
-                          .arg(color.name(), theme::TextMuted.name()));
-    }
+    // A budget can move under the user: a message's depends on the node's name,
+    // which arrives with the handshake and differs from node to node. Text that
+    // no longer fits is cut from the end there and then, since there is no
+    // honest count to show for a field that is over.
+    void setBudget(int budget);
 
 private:
-    QColor color_;  // invalid until the first setUsed(), so that one always applies
+    // `atCursor` says where an overflow came from. An edit put it in at the
+    // cursor and that is where it comes back out, so typing into a full field
+    // does nothing rather than eating a character somewhere else; a budget that
+    // shrank under text which already fit inserted nothing anywhere, and comes
+    // off the end.
+    void enforce(bool atCursor);
+
+    QLineEdit* field_ = nullptr;
+    int budget_ = 0;
+    QColor color_;  // invalid until the first paint, so that one always applies
 };

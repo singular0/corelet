@@ -319,11 +319,15 @@ tight lines rather than the three a desktop client would spend.
   anything inside 24 hours and prepends `d MMM` beyond that — a channel list is scanned rather
   than read, and a bare time on a week-old row means nothing. Mesh timestamps can sit slightly in
   the future when a sender's clock runs fast, which still counts as just now.
-- Every field with a byte budget carries a `ByteCounter` (`ui/byte_counter.h`), showing the room
-  left and turning amber near the limit and red past it. None of them cap typing: the budgets are
-  encoded bytes and `QLineEdit::setMaxLength` counts characters, so it would cut a paste short or
-  stop typing early on anything but ASCII. Over budget the text stays put and the action that would
-  send it is disabled, so nothing anyone typed is thrown away to make it fit. A counter is for a
-  budget, not for any bounded field: a channel key is an exact size and a port a numeric range, and
-  neither gets one. The counter is a fixed width so the field beside it does not resize per digit,
-  and it repaints its stylesheet only when the colour changes, since it runs on every keystroke.
+- Every field with a byte budget carries a `ByteCounter` (`ui/byte_counter.h`), which both shows the
+  room left — amber inside the last ten bytes — and holds the field inside it, so the count is never
+  asked to show a negative number. It is what `QLineEdit::setMaxLength` would be if that counted
+  encoded bytes instead of characters, which is the whole reason it exists: the same 32-byte field
+  holds 32 Latin letters, 16 Cyrillic ones or 8 emoji. Overflow comes back out from in front of the
+  cursor rather than off the end of the field, so typing into a full field does nothing at all
+  instead of pushing a character out somewhere the user is not looking, and `clampToUtf8Bytes` cuts
+  between grapheme clusters — half a surrogate pair is not a character, and an accent without its
+  letter is a different one. A counter is for a budget, not for any bounded field: a channel key is
+  an exact size and a port a numeric range, and neither gets one. The counter is a fixed width so
+  the field beside it does not resize per digit, and it repaints its stylesheet only when the colour
+  changes, since it runs on every keystroke.
