@@ -10,7 +10,6 @@ class QLineEdit;
 class QPushButton;
 class QRadioButton;
 class QTabWidget;
-class ByteCounter;
 
 // Adds a channel to a free slot on the device: a new private one, an existing
 // private one someone shared the key for, or a public channel whose key anyone
@@ -54,15 +53,12 @@ private:
 
     QTabWidget* tabs_ = nullptr;
     QLineEdit* createName_ = nullptr;
-    ByteCounter* createNameCount_ = nullptr;
     QLineEdit* createKey_ = nullptr;
     QLineEdit* joinName_ = nullptr;
-    ByteCounter* joinNameCount_ = nullptr;
     QLineEdit* joinKey_ = nullptr;
     QRadioButton* publicWellKnown_ = nullptr;
     QRadioButton* publicHashtag_ = nullptr;
     QLineEdit* hashtag_ = nullptr;
-    ByteCounter* hashtagCount_ = nullptr;
     QLabel* error_ = nullptr;
     QPushButton* addButton_ = nullptr;
 };

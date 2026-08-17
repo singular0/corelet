@@ -22,7 +22,7 @@
 
 #include "protocol/protocol.h"
 #include "protocol/text_limits.h"
-#include "ui/byte_counter.h"
+#include "ui/byte_limit.h"
 #include "ui/dialog_settings.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -94,22 +94,11 @@ bool isZero(const QByteArray& secret) {
 // The channel name a typed hashtag amounts to, or empty when it does not name
 // one yet. The '#' is part of the hashed name -- a tag typed without one would
 // otherwise derive a different key than everyone else's -- and so also a byte of
-// the 32 the name field holds, which is why the field's counter reserves one.
+// the 32 the name field holds, which is why the field's limit reserves one.
 QString hashtagName(const QString& typed) {
     QString tag = typed.trimmed();
     if (!tag.startsWith(QLatin1Char('#'))) tag.prepend(QLatin1Char('#'));
     return tag.size() > 1 ? tag : QString();
-}
-
-// The counter sits beside its field rather than under it: the uConsole panel is
-// 480 pixels tall and a dialog cannot spend a line on each of three tabs.
-QHBoxLayout* fieldWithCounter(QLineEdit* field, ByteCounter* counter) {
-    auto* row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(6);
-    row->addWidget(field, 1);
-    row->addWidget(counter);
-    return row;
 }
 
 }  // namespace
@@ -138,15 +127,13 @@ void AddChannelDialog::buildUi() {
     createLayout->setContentsMargins(12, 10, 12, 10);
     createLayout->setSpacing(6);
 
-    // No setMaxLength on any of the three name fields: the wire limit is 32
+    // Not setMaxLength on any of the three name fields: the wire limit is 32
     // encoded bytes, which QLineEdit cannot express -- it counts characters, and
     // a name in Cyrillic or with an emoji in it runs out of field long before it
-    // runs out of characters. Each field's counter caps it in the right unit and
-    // shows what is left while it does.
+    // runs out of characters. A ByteLimit caps each one in the right unit.
     createName_ = new QLineEdit;
     createName_->setPlaceholderText(QStringLiteral("Kitchen table"));
-    createNameCount_ = new ByteCounter;
-    createNameCount_->attach(createName_, proto::MaxChannelNameBytes);
+    new ByteLimit(createName_, proto::MaxChannelNameBytes);
 
     createKey_ = new QLineEdit;
     createKey_->setReadOnly(true);
@@ -177,7 +164,7 @@ void AddChannelDialog::buildUi() {
     regenerate->setText(QStringLiteral("New key"));
     regenerate->setToolTip(QStringLiteral("New key"));
 
-    createLayout->addRow(QStringLiteral("Name"), fieldWithCounter(createName_, createNameCount_));
+    createLayout->addRow(QStringLiteral("Name"), createName_);
     createLayout->addRow(QStringLiteral("Key"), createKey_);
 
     // --- join with a key ----------------------------------------------------
@@ -188,16 +175,16 @@ void AddChannelDialog::buildUi() {
 
     joinName_ = new QLineEdit;
     joinName_->setPlaceholderText(QStringLiteral("Kitchen table"));
-    joinNameCount_ = new ByteCounter;
-    joinNameCount_->attach(joinName_, proto::MaxChannelNameBytes);
+    new ByteLimit(joinName_, proto::MaxChannelNameBytes);
 
-    // No counter on the key: it is an exact size rather than a budget, and a
-    // key that is the wrong length is not nearly there, it is the wrong key.
+    // No limit on the key: it is an exact size rather than a budget, and a key
+    // of the wrong length is not nearly right, it is the wrong key. Refusing
+    // characters would only make that look like a length to grow into.
     joinKey_ = new QLineEdit;
     joinKey_->setPlaceholderText(QStringLiteral("32 hex characters, or base64"));
     joinKey_->setFont(mono);
 
-    joinLayout->addRow(QStringLiteral("Name"), fieldWithCounter(joinName_, joinNameCount_));
+    joinLayout->addRow(QStringLiteral("Name"), joinName_);
     joinLayout->addRow(QStringLiteral("Key"), joinKey_);
 
     // --- public and hashtag -------------------------------------------------
@@ -223,19 +210,17 @@ void AddChannelDialog::buildUi() {
 
     hashtag_ = new QLineEdit;
     hashtag_->setPlaceholderText(QStringLiteral("#jokes"));
-    hashtagCount_ = new ByteCounter;
     // One byte short of the field: the '#' this dialog puts in front of a tag
     // typed without one is part of the name that reaches the slot, and reserving
     // it always beats a budget that moves by a byte as the user types. Someone
     // who types their own '#' is out a byte of a 32-byte name, which no one will
     // ever meet.
-    hashtagCount_->attach(hashtag_, proto::MaxChannelNameBytes - 1);
+    new ByteLimit(hashtag_, proto::MaxChannelNameBytes - 1);
 
     auto* hashtagRow = new QHBoxLayout;
     hashtagRow->setSpacing(6);
     hashtagRow->addWidget(publicHashtag_);
     hashtagRow->addWidget(hashtag_, 1);
-    hashtagRow->addWidget(hashtagCount_);
 
     publicLayout->addWidget(publicWellKnown_);
     publicLayout->addLayout(hashtagRow);
@@ -265,10 +250,9 @@ void AddChannelDialog::buildUi() {
     connect(tabs_, &QTabWidget::currentChanged, this, [this] { updateOkButton(); });
     connect(publicWellKnown_, &QRadioButton::toggled, this, [this](bool on) {
         hashtag_->setEnabled(!on);
-        hashtagCount_->setEnabled(!on);
         updateOkButton();
     });
-    // Connected after each counter's own, so this reads fields already held
+    // Connected after each field's ByteLimit, so this reads fields already held
     // inside their budgets.
     for (QLineEdit* field : {createName_, joinName_, joinKey_, hashtag_})
         connect(field, &QLineEdit::textChanged, this, [this] { updateOkButton(); });
@@ -338,7 +322,7 @@ void AddChannelDialog::updateOkButton() {
     }
 
     // Nothing checks the name's length here: every field it can come from is
-    // capped at the 32-byte wire field by its counter, with the hashtag's '#'
+    // capped at the 32-byte wire field by a ByteLimit, with the hashtag's '#'
     // reserved out of the same 32. CompanionClient::setChannel refuses an
     // over-long name in any case, which is where a caller that is not this
     // dialog would find out.

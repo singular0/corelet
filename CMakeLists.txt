@@ -68,7 +68,7 @@ add_executable(corelet
     src/model/channel_model.cpp
     src/ui/theme.cpp
     src/ui/icons.cpp
-    src/ui/byte_counter.cpp
+    src/ui/byte_limit.cpp
     src/ui/channel_delegate.cpp
     src/ui/message_delegate.cpp
     src/ui/connect_dialog.cpp

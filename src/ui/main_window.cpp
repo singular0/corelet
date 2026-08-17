@@ -22,7 +22,7 @@
 #include "model/chat_model.h"
 #include "protocol/text_limits.h"
 #include "ui/add_channel_dialog.h"
-#include "ui/byte_counter.h"
+#include "ui/byte_limit.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
 #include "ui/dialog_settings.h"
@@ -391,10 +391,11 @@ void MainWindow::buildUi() {
 
     input_ = new QLineEdit;
     input_->setPlaceholderText(QStringLiteral("Message"));
-    // No setMaxLength: the limit is a byte budget rather than a character count,
-    // and the counter below enforces it. What fits depends on the node's name,
-    // which is not known yet, so it starts on the budget of a nameless node and
-    // is corrected when SELF_INFO answers.
+    // Not setMaxLength: the limit is a budget of encoded bytes rather than a
+    // character count. What fits depends on the node's name, which is not known
+    // yet, so this starts on the budget of a nameless node and is corrected
+    // when SELF_INFO answers.
+    messageLimit_ = new ByteLimit(input_, proto::maxMessageBytes(client_->device().name));
 
     const int sendIconSize = theme::scaled(input_->font(), 16);
     QIcon sendIcon;
@@ -409,18 +410,13 @@ void MainWindow::buildUi() {
     sendAction_->setText(QStringLiteral("Send message"));
     sendAction_->setToolTip(QStringLiteral("Send message"));
 
-    charCount_ = new ByteCounter;
-    charCount_->attach(input_, proto::maxMessageBytes(client_->device().name));
-    const QFont countFont = theme::secondaryFont(font());
-
     inputLayout->addWidget(input_);
-    inputLayout->addWidget(charCount_, 0, Qt::AlignRight);
 
     // Sits above the message box, where the eye already is when a send fails,
     // and takes no room at all the rest of the time.
     notice_ = new ElidedLabel;
     notice_->setObjectName(QStringLiteral("notice"));
-    notice_->setFont(countFont);
+    notice_->setFont(theme::secondaryFont(font()));
     notice_->hide();
 
     noticeTimer_ = new QTimer(this);
@@ -944,7 +940,7 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
 // left for the body moves with that name: connecting, or moving to a node called
 // something else, is what makes this a budget rather than a constant.
 void MainWindow::updateMessageBudget() {
-    charCount_->setBudget(proto::maxMessageBytes(client_->device().name));
+    messageLimit_->setBudget(proto::maxMessageBytes(client_->device().name));
     updateInputState();
 }
 

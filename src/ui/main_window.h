@@ -15,7 +15,7 @@ class QPushButton;
 class QSplitter;
 class QTimer;
 class QToolButton;
-class ByteCounter;
+class ByteLimit;
 class ElidedLabel;
 class MessageDelegate;
 class NodePane;
@@ -124,7 +124,9 @@ private:
     QLabel* header_ = nullptr;
     QLineEdit* input_ = nullptr;
     QAction* sendAction_ = nullptr;
-    ByteCounter* charCount_ = nullptr;
+    // Caps the message box in encoded bytes. Held on to because the budget moves
+    // with the node's name.
+    ByteLimit* messageLimit_ = nullptr;
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;
     // Non-empty while storage is unusable, which is also while the inbox drain
