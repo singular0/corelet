@@ -243,7 +243,10 @@ void MainWindow::showAddChannelMenu() {
         // menu draws in Active mode: a muted glyph left there would be the one
         // thing on it that did not come forward.
         set.addPixmap(icons::tinted(icon, iconSize, theme::Background, dpr), QIcon::Active);
-        set.addPixmap(icons::tinted(icon, iconSize, theme::Border, dpr), QIcon::Disabled);
+        // Not the Border grey the header buttons ghost themselves with: those
+        // sit on the darker sidebar, and on a popup's lifted surface the same
+        // colour is not a dim icon, it is no icon.
+        set.addPixmap(icons::tinted(icon, iconSize, theme::IconDisabled, dpr), QIcon::Disabled);
         return menu.addAction(set, text);
     };
 

@@ -21,6 +21,10 @@ inline const QColor Border {0x2a, 0x31, 0x3d};
 inline const QColor IconBackground {0x33, 0x3c, 0x4a};
 inline const QColor Text {0xe6, 0xe9, 0xef};
 inline const QColor TextMuted {0x8a, 0x93, 0xa3};
+// A glyph on a row that cannot be chosen. Halfway from muted to the surface it
+// sits on, which is the whole point: a disabled icon has to read as dimmed
+// rather than as missing, and anything nearer the background does the latter.
+inline const QColor IconDisabled {0x57, 0x5e, 0x6c};
 inline const QColor Accent {0x4d, 0xd0, 0xb0};
 inline const QColor Warning {0xe0, 0xa0, 0x50};
 inline const QColor Error {0xe0, 0x6c, 0x6c};
