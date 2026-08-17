@@ -128,6 +128,14 @@ something else — MeshCore firmware serves one companion app at a time. Over TC
 companion protocol has **no authentication whatsoever**: the daemon listens on loopback for that
 reason, and you should only point Corelet across a network you control.
 
+## Troubleshooting
+
+If emoji appear as squares on Debian, Raspberry Pi OS or the uConsole, install the emoji font:
+
+```sh
+sudo apt install fonts-noto-color-emoji
+```
+
 ## Build from source
 
 Qt 6 and a C++20 compiler, no other dependencies.
