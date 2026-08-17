@@ -22,6 +22,7 @@
 
 #include "protocol/protocol.h"
 #include "protocol/text_limits.h"
+#include "ui/byte_counter.h"
 #include "ui/dialog_settings.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -90,6 +91,27 @@ bool isZero(const QByteArray& secret) {
     return true;
 }
 
+// The channel name a typed hashtag amounts to, or empty when it does not name
+// one yet. The '#' is part of the hashed name -- a tag typed without one would
+// otherwise derive a different key than everyone else's -- so it is also a byte
+// of the 32 the name field has, which is why the counter goes through here too.
+QString hashtagName(const QString& typed) {
+    QString tag = typed.trimmed();
+    if (!tag.startsWith(QLatin1Char('#'))) tag.prepend(QLatin1Char('#'));
+    return tag.size() > 1 ? tag : QString();
+}
+
+// The counter sits beside its field rather than under it: the uConsole panel is
+// 480 pixels tall and a dialog cannot spend a line on each of three tabs.
+QHBoxLayout* fieldWithCounter(QLineEdit* field, ByteCounter* counter) {
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(6);
+    row->addWidget(field, 1);
+    row->addWidget(counter);
+    return row;
+}
+
 }  // namespace
 
 AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWidget* parent)
@@ -98,6 +120,7 @@ AddChannelDialog::AddChannelDialog(const QVector<model::Channel>& existing, QWid
     setWindowTitle(QStringLiteral("Add channel"));
     buildUi();
     regenerateKey();
+    updateCounters();
     updateOkButton();
 }
 
@@ -119,9 +142,11 @@ void AddChannelDialog::buildUi() {
     // No setMaxLength on any of the three name fields: the wire limit is 32
     // encoded bytes, which QLineEdit cannot express -- it counts characters, and
     // a name in Cyrillic or with an emoji in it runs out of field long before it
-    // runs out of characters. updateOkButton() checks the real thing.
+    // runs out of characters. updateOkButton() checks the real thing, and the
+    // counter beside each field is what makes the limit visible before then.
     createName_ = new QLineEdit;
     createName_->setPlaceholderText(QStringLiteral("Kitchen table"));
+    createNameCount_ = new ByteCounter;
 
     createKey_ = new QLineEdit;
     createKey_->setReadOnly(true);
@@ -152,7 +177,7 @@ void AddChannelDialog::buildUi() {
     regenerate->setText(QStringLiteral("New key"));
     regenerate->setToolTip(QStringLiteral("New key"));
 
-    createLayout->addRow(QStringLiteral("Name"), createName_);
+    createLayout->addRow(QStringLiteral("Name"), fieldWithCounter(createName_, createNameCount_));
     createLayout->addRow(QStringLiteral("Key"), createKey_);
 
     // --- join with a key ----------------------------------------------------
@@ -163,12 +188,15 @@ void AddChannelDialog::buildUi() {
 
     joinName_ = new QLineEdit;
     joinName_->setPlaceholderText(QStringLiteral("Kitchen table"));
+    joinNameCount_ = new ByteCounter;
 
+    // No counter on the key: it is an exact size rather than a budget, and a
+    // key that is the wrong length is not nearly there, it is the wrong key.
     joinKey_ = new QLineEdit;
     joinKey_->setPlaceholderText(QStringLiteral("32 hex characters, or base64"));
     joinKey_->setFont(mono);
 
-    joinLayout->addRow(QStringLiteral("Name"), joinName_);
+    joinLayout->addRow(QStringLiteral("Name"), fieldWithCounter(joinName_, joinNameCount_));
     joinLayout->addRow(QStringLiteral("Key"), joinKey_);
 
     // --- public and hashtag -------------------------------------------------
@@ -194,11 +222,13 @@ void AddChannelDialog::buildUi() {
 
     hashtag_ = new QLineEdit;
     hashtag_->setPlaceholderText(QStringLiteral("#jokes"));
+    hashtagCount_ = new ByteCounter;
 
     auto* hashtagRow = new QHBoxLayout;
     hashtagRow->setSpacing(6);
     hashtagRow->addWidget(publicHashtag_);
     hashtagRow->addWidget(hashtag_, 1);
+    hashtagRow->addWidget(hashtagCount_);
 
     publicLayout->addWidget(publicWellKnown_);
     publicLayout->addLayout(hashtagRow);
@@ -228,10 +258,14 @@ void AddChannelDialog::buildUi() {
     connect(tabs_, &QTabWidget::currentChanged, this, [this] { updateOkButton(); });
     connect(publicWellKnown_, &QRadioButton::toggled, this, [this](bool on) {
         hashtag_->setEnabled(!on);
+        hashtagCount_->setEnabled(!on);
         updateOkButton();
     });
     for (QLineEdit* field : {createName_, joinName_, joinKey_, hashtag_})
-        connect(field, &QLineEdit::textChanged, this, [this] { updateOkButton(); });
+        connect(field, &QLineEdit::textChanged, this, [this] {
+            updateCounters();
+            updateOkButton();
+        });
     connect(buttons, &QDialogButtonBox::accepted, this, &AddChannelDialog::onAccepted);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -267,21 +301,26 @@ model::Channel AddChannelDialog::currentChannel() const {
             if (publicWellKnown_->isChecked()) {
                 ch.name = QStringLiteral("Public");
                 ch.secret = model::publicChannelKey();
-            } else {
-                QString tag = hashtag_->text().trimmed();
-                // The '#' is part of the hashed name, so a tag typed without one
-                // would otherwise derive a different key than everyone else's.
-                if (!tag.startsWith(QLatin1Char('#'))) tag.prepend(QLatin1Char('#'));
-                if (tag.size() > 1) {
-                    ch.name = tag;
-                    ch.secret = model::hashtagChannelKey(tag);
-                }
+            } else if (const QString tag = hashtagName(hashtag_->text()); !tag.isEmpty()) {
+                ch.name = tag;
+                ch.secret = model::hashtagChannelKey(tag);
             }
             break;
     }
 
     ch.type = model::Channel::classify(ch.name, ch.secret);
     return ch;
+}
+
+void AddChannelDialog::updateCounters() {
+    // Counted after trimming, and with the hashtag's '#' included, because that
+    // is the name that would be written to the slot.
+    createNameCount_->setUsed(proto::utf8Bytes(createName_->text().trimmed()),
+                              proto::MaxChannelNameBytes);
+    joinNameCount_->setUsed(proto::utf8Bytes(joinName_->text().trimmed()),
+                            proto::MaxChannelNameBytes);
+    hashtagCount_->setUsed(proto::utf8Bytes(hashtagName(hashtag_->text())),
+                           proto::MaxChannelNameBytes);
 }
 
 void AddChannelDialog::updateOkButton() {

@@ -22,6 +22,7 @@
 #include "model/chat_model.h"
 #include "protocol/text_limits.h"
 #include "ui/add_channel_dialog.h"
+#include "ui/byte_counter.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
 #include "ui/dialog_settings.h"
@@ -409,13 +410,8 @@ void MainWindow::buildUi() {
     sendAction_->setText(QStringLiteral("Send message"));
     sendAction_->setToolTip(QStringLiteral("Send message"));
 
-    charCount_ = new QLabel;
-    const QFont countFont = theme::secondaryFont(charCount_->font());
-    charCount_->setFont(countFont);
-    charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
-    // Wide enough for the sign a message over budget puts in front of the count.
-    charCount_->setMinimumWidth(32);
-    charCount_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    charCount_ = new ByteCounter;
+    const QFont countFont = theme::secondaryFont(font());
 
     inputLayout->addWidget(input_);
     inputLayout->addWidget(charCount_, 0, Qt::AlignRight);
@@ -953,14 +949,8 @@ int MainWindow::messageBytesLeft() const {
 }
 
 void MainWindow::updateMessageBudget() {
-    constexpr int WarningThreshold = 10;
-    const int budget = proto::maxMessageBytes(client_->device().name);
-    const int left = messageBytesLeft();
-    charCount_->setText(QStringLiteral("%1/%2").arg(left).arg(budget));
-    const QColor color = left < 0                   ? theme::Error
-                         : left <= WarningThreshold ? theme::Warning
-                                                    : theme::TextMuted;
-    charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+    charCount_->setUsed(proto::utf8Bytes(input_->text().trimmed()),
+                        proto::maxMessageBytes(client_->device().name));
     updateInputState();
 }
 

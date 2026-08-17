@@ -319,3 +319,11 @@ tight lines rather than the three a desktop client would spend.
   anything inside 24 hours and prepends `d MMM` beyond that — a channel list is scanned rather
   than read, and a bare time on a week-old row means nothing. Mesh timestamps can sit slightly in
   the future when a sender's clock runs fast, which still counts as just now.
+- Every field with a byte budget carries a `ByteCounter` (`ui/byte_counter.h`), showing the room
+  left and turning amber near the limit and red past it. None of them cap typing: the budgets are
+  encoded bytes and `QLineEdit::setMaxLength` counts characters, so it would cut a paste short or
+  stop typing early on anything but ASCII. Over budget the text stays put and the action that would
+  send it is disabled, so nothing anyone typed is thrown away to make it fit. A counter is for a
+  budget, not for any bounded field: a channel key is an exact size and a port a numeric range, and
+  neither gets one. The counter is a fixed width so the field beside it does not resize per digit,
+  and it repaints its stylesheet only when the colour changes, since it runs on every keystroke.

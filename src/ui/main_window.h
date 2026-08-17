@@ -15,6 +15,7 @@ class QPushButton;
 class QSplitter;
 class QTimer;
 class QToolButton;
+class ByteCounter;
 class ElidedLabel;
 class MessageDelegate;
 class NodePane;
@@ -127,7 +128,7 @@ private:
     QLabel* header_ = nullptr;
     QLineEdit* input_ = nullptr;
     QAction* sendAction_ = nullptr;
-    QLabel* charCount_ = nullptr;
+    ByteCounter* charCount_ = nullptr;
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;
     // Non-empty while storage is unusable, which is also while the inbox drain
