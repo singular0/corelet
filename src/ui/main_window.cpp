@@ -239,6 +239,10 @@ void MainWindow::showAddChannelMenu() {
     auto item = [&](const QString& icon, const QString& text) {
         QIcon set;
         set.addPixmap(icons::tinted(icon, iconSize, theme::TextMuted, dpr), QIcon::Normal);
+        // The highlighted row goes accent under its icon, and that is the row a
+        // menu draws in Active mode: a muted glyph left there would be the one
+        // thing on it that did not come forward.
+        set.addPixmap(icons::tinted(icon, iconSize, theme::Background, dpr), QIcon::Active);
         set.addPixmap(icons::tinted(icon, iconSize, theme::Border, dpr), QIcon::Disabled);
         return menu.addAction(set, text);
     };

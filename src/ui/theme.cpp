@@ -113,12 +113,15 @@ void apply(QApplication& app) {
            Only the colours are set: the item metrics stay the style's, which is
            what keeps the icon column right under a larger desktop font. */
         QMenu { background: %4; border: 1px solid %5; padding: 4px; }
-        QMenu::item:selected { background: %8; }
+        /* The accent, as in the list above, rather than the sidebar's selected
+           grey: a menu highlight follows the pointer and is gone again, so it
+           has to be obvious at a glance and cannot rely on being compared with
+           the row beside it. */
+        QMenu::item:selected { background: %6; color: #11221e; }
         QMenu::item:disabled { color: %7; }
     )")
                           .arg(Background.name(), Text.name(), Sidebar.name(), Surface.name(),
-                               Border.name(), Accent.name(), TextMuted.name(),
-                               SidebarSelected.name()));
+                               Border.name(), Accent.name(), TextMuted.name()));
 }
 
 }  // namespace theme
