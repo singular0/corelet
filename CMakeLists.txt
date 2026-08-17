@@ -72,7 +72,7 @@ add_executable(corelet
     src/ui/channel_delegate.cpp
     src/ui/message_delegate.cpp
     src/ui/connect_dialog.cpp
-    src/ui/add_channel_dialog.cpp
+    src/ui/add_channel_dialogs.cpp
     src/ui/share_channel_dialog.cpp
     src/ui/node_pane.cpp
     src/ui/main_window.cpp

@@ -53,7 +53,12 @@ private:
     // Points the client at a target, replacing whatever it was talking to.
     void connectTo(const proto::ConnectTarget& target);
     void openConnectDialog();
-    void openAddChannelDialog();
+    // The add button's menu: one item per kind of channel, since which kind is
+    // being added is settled before any of them has a field to fill in.
+    void showAddChannelMenu();
+    // Writes a channel the menu produced -- from a dialog, or straight from the
+    // public channel's constant key -- to the slot it carries.
+    void addChannel(const model::Channel& channel);
     // Shows the selected channel's key, to pass on to whoever is being invited.
     void shareCurrentChannel();
     // Asks first: this deletes the key from the device, and a private channel

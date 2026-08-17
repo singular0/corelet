@@ -108,9 +108,17 @@ void apply(QApplication& app) {
         }
         QToolButton#iconButton:hover { background: %4; }
         QRadioButton { spacing: 6px; }
+        /* A popup is a QWidget too, so without this it would take the flat
+           window background above and stand off the page by nothing at all.
+           Only the colours are set: the item metrics stay the style's, which is
+           what keeps the icon column right under a larger desktop font. */
+        QMenu { background: %4; border: 1px solid %5; padding: 4px; }
+        QMenu::item:selected { background: %8; }
+        QMenu::item:disabled { color: %7; }
     )")
                           .arg(Background.name(), Text.name(), Sidebar.name(), Surface.name(),
-                               Border.name(), Accent.name(), TextMuted.name()));
+                               Border.name(), Accent.name(), TextMuted.name(),
+                               SidebarSelected.name()));
 }
 
 }  // namespace theme

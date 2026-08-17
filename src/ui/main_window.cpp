@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMenu>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
@@ -17,11 +18,12 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <memory>
 
 #include "model/channel_model.h"
 #include "model/chat_model.h"
 #include "protocol/text_limits.h"
-#include "ui/add_channel_dialog.h"
+#include "ui/add_channel_dialogs.h"
 #include "ui/byte_limit.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
@@ -216,16 +218,71 @@ void MainWindow::openConnectDialog() {
     connectTo(dialog.target());
 }
 
-void MainWindow::openAddChannelDialog() {
+void MainWindow::showAddChannelMenu() {
     // The device holds the channel list and the keys, so adding one is a write
-    // to it — and the dialog needs those keys to recognise a channel that is
-    // already joined. Neither works from the offline cache.
+    // to it — and every item below needs those keys, to recognise a channel that
+    // is already joined. Neither works from the offline cache.
     if (client_->state() != proto::CompanionClient::State::Ready) return;
 
-    AddChannelDialog dialog(client_->channels(), this);
-    if (dialog.exec() != QDialog::Accepted) return;
+    // Taken by value: each dialog runs an event loop, and a reconnect
+    // re-enumerating the channels underneath it would leave the reference it
+    // was built from dangling.
+    const QVector<model::Channel> existing = client_->channels();
+    if (!AddChannelDialog::hasFreeSlot(existing)) return;
 
-    const model::Channel ch = dialog.channel();
+    // The kind of channel is chosen before anything is typed, so it is a menu
+    // rather than a control inside a dialog. The icons are the ones the sidebar
+    // paints for each kind, which is what the new row will look like.
+    const int iconSize = theme::scaled(font(), 14);
+    const qreal dpr = devicePixelRatioF();
+    QMenu menu(this);
+    auto item = [&](const QString& icon, const QString& text) {
+        QIcon set;
+        set.addPixmap(icons::tinted(icon, iconSize, theme::TextMuted, dpr), QIcon::Normal);
+        set.addPixmap(icons::tinted(icon, iconSize, theme::Border, dpr), QIcon::Disabled);
+        return menu.addAction(set, text);
+    };
+
+    QAction* createPrivate = item(QStringLiteral("lock"),
+                                  QStringLiteral("Create a Private Channel"));
+    QAction* joinPrivate = item(QStringLiteral("lock"),
+                                QStringLiteral("Join a Private Channel"));
+    QAction* joinPublic = item(QStringLiteral("globe"),
+                               QStringLiteral("Join the Public Channel"));
+    QAction* joinHashtag = item(QStringLiteral("hash"),
+                                QStringLiteral("Join a Hashtag Channel"));
+
+    // There is exactly one public channel and its key is a constant, so joining
+    // it twice is not a thing to do; the item stays visible to say the device
+    // already has it.
+    if (AddChannelDialog::publicChannelJoined(existing)) {
+        joinPublic->setEnabled(false);
+        joinPublic->setText(QStringLiteral("Join the Public Channel (already joined)"));
+    }
+
+    QAction* chosen =
+        menu.exec(addChannelButton_->mapToGlobal(QPoint(0, addChannelButton_->height())));
+
+    // The public channel is the one kind with nothing to fill in.
+    if (chosen == joinPublic) {
+        addChannel(AddChannelDialog::publicChannel(existing));
+        return;
+    }
+
+    std::unique_ptr<AddChannelDialog> dialog;
+    if (chosen == createPrivate)
+        dialog = std::make_unique<CreatePrivateChannelDialog>(existing, this);
+    else if (chosen == joinPrivate)
+        dialog = std::make_unique<JoinPrivateChannelDialog>(existing, this);
+    else if (chosen == joinHashtag)
+        dialog = std::make_unique<JoinHashtagChannelDialog>(existing, this);
+    if (!dialog || dialog->exec() != QDialog::Accepted) return;
+
+    addChannel(dialog->channel());
+}
+
+void MainWindow::addChannel(const model::Channel& ch) {
+    if (!ch.configured()) return;
     showNotice(QStringLiteral("Adding %1...").arg(ch.displayName()), 10000);
     client_->setChannel(ch.index, ch.name, ch.secret);
 }
@@ -446,7 +503,7 @@ void MainWindow::buildUi() {
 
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
-    connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::openAddChannelDialog);
+    connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::showAddChannelMenu);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
     connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
