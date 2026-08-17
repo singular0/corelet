@@ -366,13 +366,10 @@ JoinHashtagChannelDialog::JoinHashtagChannelDialog(const QVector<model::Channel>
     // ever meet.
     new ByteLimit(tag_, proto::MaxChannelNameBytes - 1);
 
-    // Two things the field cannot show: that the '#' is optional -- it is part
-    // of the hashed name, so a tag typed without one has to grow it or derive
-    // somebody else's key -- and that the tab this used to share with the public
-    // channel was what said a hashtag is not private.
-    auto* note = new QLabel(QStringLiteral(
-        "A leading '#' is added if you leave it out. The key comes from the tag itself, "
-        "so anyone who knows it is already in."));
+    // The one thing the field cannot show: whether it wants the '#' typed. It
+    // is part of the hashed name, so a tag typed without one has to grow it or
+    // derive somebody else's key.
+    auto* note = new QLabel(QStringLiteral("A leading '#' is added if you leave it out."));
     note->setWordWrap(true);
     note->setFont(theme::secondaryFont(font()));
     note->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
