@@ -20,6 +20,7 @@
 
 #include "model/channel_model.h"
 #include "model/chat_model.h"
+#include "protocol/text_limits.h"
 #include "ui/add_channel_dialog.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
@@ -389,9 +390,11 @@ void MainWindow::buildUi() {
 
     input_ = new QLineEdit;
     input_->setPlaceholderText(QStringLiteral("Message"));
-    // A mesh payload is 184 bytes; the daemon would reject anything longer, so
-    // stop it at the keyboard instead of after a failed transmit.
-    input_->setMaxLength(proto::MaxMessageChars);
+    // No maximum length: the limit is a byte budget rather than a character
+    // count (see protocol/text_limits.h), and QLineEdit can only cap characters
+    // -- which would either cut a pasted message short or stop typing well
+    // before the real limit. Over-long text stays in the box with the counter
+    // negative and Send disabled, so nothing anyone typed is thrown away.
 
     const int sendIconSize = theme::scaled(input_->font(), 16);
     QIcon sendIcon;
@@ -410,7 +413,8 @@ void MainWindow::buildUi() {
     const QFont countFont = theme::secondaryFont(charCount_->font());
     charCount_->setFont(countFont);
     charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
-    charCount_->setMinimumWidth(28);
+    // Wide enough for the sign a message over budget puts in front of the count.
+    charCount_->setMinimumWidth(32);
     charCount_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     inputLayout->addWidget(input_);
@@ -457,11 +461,11 @@ void MainWindow::buildUi() {
             &MainWindow::onChannelSelected);
     connect(sendAction_, &QAction::triggered, this, &MainWindow::onSendClicked);
     connect(input_, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
-    connect(input_, &QLineEdit::textChanged, this, &MainWindow::onTextChanged);
+    connect(input_, &QLineEdit::textChanged, this, [this] { updateMessageBudget(); });
 
     // The uConsole panel is 1280x480; this is a sane default anywhere else.
     resize(1024, 480);
-    onTextChanged({});
+    updateMessageBudget();
     updateInputState();
     updateChannelActions();
     updateHeader();
@@ -939,13 +943,24 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
         appendToView(msg);
 }
 
-void MainWindow::onTextChanged(const QString& text) {
+// Bytes left in the message the box currently holds, which may be negative.
+// Measured over the trimmed text because that is what onSendClicked() sends, so
+// the counter and the send agree about what fits; and in encoded bytes rather
+// than characters, because that is what the radio carries.
+int MainWindow::messageBytesLeft() const {
+    return proto::maxMessageBytes(client_->device().name) -
+           proto::utf8Bytes(input_->text().trimmed());
+}
+
+void MainWindow::updateMessageBudget() {
     constexpr int WarningThreshold = 10;
-    const int left = proto::MaxMessageChars - int(text.size());
-    charCount_->setText(QStringLiteral("%1/%2").arg(left).arg(proto::MaxMessageChars));
-    charCount_->setStyleSheet(
-        QStringLiteral("color: %1;")
-            .arg((left <= WarningThreshold ? theme::Warning : theme::TextMuted).name()));
+    const int budget = proto::maxMessageBytes(client_->device().name);
+    const int left = messageBytesLeft();
+    charCount_->setText(QStringLiteral("%1/%2").arg(left).arg(budget));
+    const QColor color = left < 0                   ? theme::Error
+                         : left <= WarningThreshold ? theme::Warning
+                                                    : theme::TextMuted;
+    charCount_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
     updateInputState();
 }
 
@@ -954,7 +969,8 @@ void MainWindow::updateInputState() {
     const bool canType = ready && currentChannel_ >= 0;
     const bool becameAvailable = canType && !input_->isEnabled();
     input_->setEnabled(canType);
-    sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty());
+    sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty() &&
+                            messageBytesLeft() >= 0);
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
                                : ready ? QStringLiteral("Select a channel")
                                        : QStringLiteral("Waiting for a connection..."));
@@ -1055,4 +1071,8 @@ void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
     if (!storagePreflighted_) preflightStorage();
     setWindowTitle(windowTitleFor(info.name));
     nodePane_->setDevice(info);
+    // The node prepends its name to every channel message it sends, so the name
+    // is part of the message budget: learning it, or moving to a node called
+    // something else, changes how much room the counter should be promising.
+    updateMessageBudget();
 }

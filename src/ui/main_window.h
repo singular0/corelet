@@ -37,7 +37,6 @@ protected:
 private Q_SLOTS:
     void onChannelSelected(const QModelIndex& current, const QModelIndex& previous);
     void onSendClicked();
-    void onTextChanged(const QString& text);
 
     void onStateChanged(proto::CompanionClient::State state, const QString& detail);
     void onDeviceInfo(const proto::CompanionClient::DeviceInfo& info);
@@ -71,6 +70,14 @@ private:
     // selected or the link is down, which is also when nothing can be done to it.
     std::optional<model::Channel> currentChannelOnDevice() const;
     void appendToView(const model::Message& msg);
+    // Room left in the message being typed, in encoded bytes and negative when
+    // it is over. What fits depends on the node's own name, which it prepends to
+    // every channel message, so this cannot be a constant.
+    int messageBytesLeft() const;
+    // Repaints the byte counter and, through updateInputState(), decides whether
+    // the message can go. Driven by editing and by the node name arriving, since
+    // both move the budget.
+    void updateMessageBudget();
     void updateInputState();
     // Adding and removing a channel are both writes to the device, so they need
     // a live link -- and a free slot to write into, or a removable channel

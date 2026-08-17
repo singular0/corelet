@@ -86,10 +86,7 @@ inline constexpr int MaxChannels = 8;
 
 inline constexpr quint8 TxtPlain = 0;
 
-// A channel message rides in one 184-byte mesh payload: 1 byte channel hash,
-// 2 byte MAC, and AES-ECB ciphertext rounded up to 16, wrapping a 5-byte text
-// header plus "SenderName: " and the text itself. 140 leaves headroom for a
-// long node name rather than letting the daemon reject the send.
-inline constexpr int MaxMessageChars = 140;
+// How much text fits in those fields is in protocol/text_limits.h: it is a
+// count of encoded bytes rather than a wire number, and derived from these.
 
 }  // namespace proto

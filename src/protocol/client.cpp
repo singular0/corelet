@@ -373,11 +373,22 @@ void CompanionClient::setChannel(int channelIndex, const QString& name,
         Q_EMIT channelSaveResult(channelIndex, false, QStringLiteral("invalid channel"));
         return;
     }
+    // The field is a fixed 32 bytes and padded() would cut a name to fit, quite
+    // possibly through the middle of a character. This is the one place every
+    // caller passes through, so refusing here is what keeps that from happening.
+    const QByteArray nameBytes = name.toUtf8();
+    if (nameBytes.size() > MaxChannelNameBytes) {
+        Q_EMIT channelSaveResult(channelIndex, false,
+                                 QStringLiteral("the name needs %1 bytes and the field holds %2")
+                                     .arg(nameBytes.size())
+                                     .arg(MaxChannelNameBytes));
+        return;
+    }
 
     // index(1) name(32) secret(16)
     Writer w(CmdSetChannel);
     w.u8(quint8(channelIndex))
-        .padded(name.toUtf8(), ChannelNameField)
+        .padded(nameBytes, ChannelNameField)
         .padded(secret, ChannelSecretSize);
 
     enqueue(w.bytes(), [this, channelIndex](quint8 code, Reader& r) {
@@ -423,10 +434,10 @@ void CompanionClient::clearChannel(int channelIndex) {
 }
 
 void CompanionClient::readBackChannel(int index, bool cleared) {
-    // The store truncates a long name to its 32-byte field, so what the app
-    // shows comes from the slot rather than from what it asked for. A cleared
-    // slot is read back for the same reason in reverse: the write is only
-    // believed once the device agrees the channel is gone.
+    // The store is the authority on what a slot ended up holding, so what the
+    // app shows comes from the slot rather than from what it asked for. A
+    // cleared slot is read back for the same reason in reverse: the write is
+    // only believed once the device agrees the channel is gone.
     Writer w(CmdGetChannel);
     w.u8(quint8(index));
     enqueue(w.bytes(), [this, index, cleared](quint8 code, Reader& r) {
@@ -571,12 +582,26 @@ void CompanionClient::sendChannelMessage(int channelIndex, const QString& text, 
         return;
     }
 
+    // A message that will not fit one mesh payload is refused by the node after
+    // it has been encrypted, and answered with a NOT_FOUND that says nothing
+    // about length. The budget is knowable here -- the node prepends the name
+    // SELF_INFO gave us -- so say so plainly instead.
+    const QByteArray body = text.toUtf8();
+    const int budget = maxMessageBytes(device_.name);
+    if (body.size() > budget) {
+        Q_EMIT sendResult(token, false,
+                          QStringLiteral("the message needs %1 bytes and only %2 fit")
+                              .arg(body.size())
+                              .arg(budget));
+        return;
+    }
+
     // txt_type(1) channel_index(1) timestamp(4) message
     Writer w(CmdSendChannelTxtMsg);
     w.u8(TxtPlain)
         .u8(quint8(channelIndex))
         .u32(quint32(QDateTime::currentSecsSinceEpoch()))
-        .tail(text.toUtf8());
+        .tail(body);
 
     enqueue(
         w.bytes(),

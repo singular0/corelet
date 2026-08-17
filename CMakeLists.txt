@@ -173,6 +173,16 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME chat-model-test COMMAND chat-model-test)
 
+    # Header-only rules, so nothing of the app is compiled in beside the test.
+    add_executable(text-limits-test tests/text_limits_test.cpp)
+    target_include_directories(text-limits-test PRIVATE src)
+    target_link_libraries(text-limits-test PRIVATE Qt6::Core)
+    target_compile_definitions(text-limits-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(text-limits-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME text-limits-test COMMAND text-limits-test)
+
     add_test(NAME version-test
         COMMAND ${CMAKE_COMMAND}
             -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}

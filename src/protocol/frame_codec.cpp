@@ -65,6 +65,7 @@ Writer& Writer::u32(quint32 v) {
 }
 
 Writer& Writer::padded(const QByteArray& data, int width) {
+    Q_ASSERT(data.size() <= width);
     const int n = qMin(data.size(), qsizetype(width));
     buf_.append(data.constData(), n);
     buf_.append(width - n, '\0');

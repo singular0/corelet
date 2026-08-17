@@ -205,6 +205,15 @@ Violating any of these produces bugs that only show up against a real device:
   never the key.
 - **Sender names are unauthenticated.** Channel messages are `"Name: body"` text; anyone can claim
   any name. Never treat `Message::sender` as identity.
+- **Text limits are byte budgets, never character counts.** `protocol/text_limits.h` derives them
+  from the 184-byte mesh payload: a channel name is 32 encoded bytes, and a message body is what the
+  184 leaves once the envelope, the 5-byte text header and the node's own `"Name: "` prefix are
+  taken — which is why the budget depends on the name `SELF_INFO` reported and cannot be a constant.
+  A Cyrillic letter costs two bytes and an emoji four, so a `QString` character count over-promises
+  by up to four times, and the send comes back from the node as an unexplained `NOT_FOUND`.
+  `CompanionClient` refuses an over-long name or body rather than letting `Writer::padded` cut one
+  through the middle of a character; the UI reads the same rules, and neither end truncates what
+  somebody typed.
 - **Our own sends never come back over the air** — they are echoed locally in
   `MainWindow::onSendResult` when the daemon acknowledges.
 - **Only framing differs between links.** `Transport` hides it: the two stream links length-prefix

@@ -7,6 +7,7 @@
 
 #include "model/types.h"
 #include "protocol/frame_codec.h"
+#include "protocol/text_limits.h"
 #include "protocol/transport.h"
 
 class QTimer;
@@ -71,11 +72,14 @@ public:
 
     // `token` is handed straight back in sendResult(). Nothing in the protocol
     // identifies which send an answer belongs to, so the caller's own tag is
-    // what lets it find the message it put on screen.
+    // what lets it find the message it put on screen. Text longer than
+    // maxMessageBytes(device().name) is refused through sendResult() rather
+    // than truncated: what a caller is handed back is what it typed.
     void sendChannelMessage(int channelIndex, const QString& text, int token);
 
     // Writes a channel into a slot, creating it or replacing what was there.
     // The far end owns the keys, so this is the only way the app can add one.
+    // A name over MaxChannelNameBytes is refused through channelSaveResult().
     void setChannel(int channelIndex, const QString& name, const QByteArray& secret);
 
     // Empties a slot. There is no delete command: a slot with an all-zero key is

@@ -21,6 +21,7 @@
 #include <optional>
 
 #include "protocol/protocol.h"
+#include "protocol/text_limits.h"
 #include "ui/dialog_settings.h"
 #include "ui/icons.h"
 #include "ui/theme.h"
@@ -115,9 +116,12 @@ void AddChannelDialog::buildUi() {
     createLayout->setContentsMargins(12, 10, 12, 10);
     createLayout->setSpacing(6);
 
+    // No setMaxLength on any of the three name fields: the wire limit is 32
+    // encoded bytes, which QLineEdit cannot express -- it counts characters, and
+    // a name in Cyrillic or with an emoji in it runs out of field long before it
+    // runs out of characters. updateOkButton() checks the real thing.
     createName_ = new QLineEdit;
     createName_->setPlaceholderText(QStringLiteral("Kitchen table"));
-    createName_->setMaxLength(proto::ChannelNameField);
 
     createKey_ = new QLineEdit;
     createKey_->setReadOnly(true);
@@ -159,7 +163,6 @@ void AddChannelDialog::buildUi() {
 
     joinName_ = new QLineEdit;
     joinName_->setPlaceholderText(QStringLiteral("Kitchen table"));
-    joinName_->setMaxLength(proto::ChannelNameField);
 
     joinKey_ = new QLineEdit;
     joinKey_->setPlaceholderText(QStringLiteral("32 hex characters, or base64"));
@@ -191,7 +194,6 @@ void AddChannelDialog::buildUi() {
 
     hashtag_ = new QLineEdit;
     hashtag_->setPlaceholderText(QStringLiteral("#jokes"));
-    hashtag_->setMaxLength(proto::ChannelNameField);
 
     auto* hashtagRow = new QHBoxLayout;
     hashtagRow->setSpacing(6);
@@ -297,6 +299,19 @@ void AddChannelDialog::updateOkButton() {
 
     if (freeSlot_ < 0) {
         setError(QStringLiteral("All %1 channel slots are in use.").arg(proto::MaxChannels));
+        addButton_->setEnabled(false);
+        return;
+    }
+
+    // The name goes into a fixed 32-byte field, and a hashtag carries the '#'
+    // this dialog adds for the user, so it is the assembled name that has to
+    // fit. Say how far over it is rather than cutting it, which for anything
+    // but ASCII could land in the middle of a character.
+    const int nameBytes = proto::utf8Bytes(ch.name);
+    if (nameBytes > proto::MaxChannelNameBytes) {
+        setError(QStringLiteral("That name needs %1 bytes and the field holds %2.")
+                     .arg(nameBytes)
+                     .arg(proto::MaxChannelNameBytes));
         addButton_->setEnabled(false);
         return;
     }

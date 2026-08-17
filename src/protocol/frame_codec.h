@@ -34,7 +34,11 @@ public:
     Writer& u8(quint8 v);
     Writer& u16(quint16 v);
     Writer& u32(quint32 v);
-    // Fixed-width NUL-padded field, truncated rather than overflowing.
+    // Fixed-width NUL-padded field. Oversized data is a caller's bug and the
+    // last-resort behaviour is to truncate rather than overflow the field --
+    // but truncation here cuts bytes, so on user text it can land inside a
+    // multi-byte character. Validate against the limits in text_limits.h before
+    // calling; the assert is what catches a call site that forgets.
     Writer& padded(const QByteArray& data, int width);
     // Trailing variable-length text: no length prefix, no terminator.
     Writer& tail(const QByteArray& data);
