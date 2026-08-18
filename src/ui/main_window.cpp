@@ -28,6 +28,7 @@
 #include "ui/byte_limit.h"
 #include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
+#include "ui/contacts_dialog.h"
 #include "ui/dialog_settings.h"
 #include "ui/elided_label.h"
 #include "ui/icons.h"
@@ -217,6 +218,13 @@ void MainWindow::openConnectDialog() {
     ConnectDialog dialog(this);
     if (dialog.exec() != QDialog::Accepted) return;
     connectTo(dialog.target());
+}
+
+void MainWindow::showContacts() {
+    // The node pane keeps its button disabled while the link is down; this is
+    // what makes that a guard rather than a coat of paint.
+    if (client_->state() != proto::CompanionClient::State::Ready) return;
+    ContactsDialog(client_, this).exec();
 }
 
 void MainWindow::showAddChannelMenu() {
@@ -522,6 +530,7 @@ void MainWindow::buildUi() {
 
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
+    connect(nodePane_, &NodePane::contactsRequested, this, &MainWindow::showContacts);
     connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::showAddChannelMenu);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);

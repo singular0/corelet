@@ -21,6 +21,7 @@ enum Cmd : quint8 {
     CmdSyncNextMessage = 10,
     CmdGetBatteryVoltage = 20,
     CmdDeviceQuery = 22,
+    CmdGetContactByKey = 30,
     CmdGetChannel = 31,
     CmdSetChannel = 32,
 };
@@ -83,6 +84,12 @@ inline constexpr int MaxFrameSize = 8192;
 inline constexpr int ChannelNameField = 32;
 inline constexpr int ChannelSecretSize = 16;
 inline constexpr int MaxChannels = 8;
+
+inline constexpr int ContactNameField = 32;
+// Only the first out_path_len bytes are meaningful, but the field is always
+// here in full: reading out_path_len bytes instead leaves every later field of
+// a contact frame short by the padding.
+inline constexpr int ContactPathField = 64;
 
 inline constexpr quint8 TxtPlain = 0;
 

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QQueue>
+#include <QSet>
 #include <QVector>
 #include <functional>
 
@@ -69,6 +70,7 @@ public:
     bool isRunning() const { return running_; }
     const DeviceInfo& device() const { return device_; }
     const QVector<model::Channel>& channels() const { return channels_; }
+    const QVector<model::Contact>& contacts() const { return contacts_; }
 
     // `token` is handed straight back in sendResult(). Nothing in the protocol
     // identifies which send an answer belongs to, so the caller's own tag is
@@ -104,6 +106,14 @@ Q_SIGNALS:
     void stateChanged(State state, const QString& detail);
     void deviceInfoChanged(const DeviceInfo& info);
     void channelsChanged(const QVector<model::Channel>& channels);
+    // The whole address book, as the device enumerated it. Emitted once per
+    // handshake, and with an empty list if the far end has nothing to say.
+    void contactsChanged(const QVector<model::Contact>& contacts);
+    // One contact an advert or a path update refreshed, already merged into
+    // contacts(). Separate from the list signal because adverts arrive all day:
+    // a view can repaint the one row instead of rebuilding a list somebody is
+    // reading down.
+    void contactChanged(const model::Contact& contact);
     void messageReceived(const model::Message& msg);
     // A direct message the daemon handed us. v1 has no DM view, but SYNC pops
     // from the daemon's inbox, so these must be captured rather than dropped.
@@ -148,6 +158,14 @@ private:
     void beginHandshake();
     void requestBattery();
     void requestChannel(int index);
+    // The contact stream: CONTACTS_START, a CONTACT per node, END_OF_CONTACTS.
+    // Multi-frame, so its handler returns false until the terminator arrives.
+    void requestContacts();
+    // Re-reads one contact after a push said something about it changed. A push
+    // carries the key and nothing else, so what changed has to be asked for.
+    void requestContact(const QByteArray& pubkey);
+    void upsertContact(const model::Contact& contact);
+    static model::Contact parseContact(Reader& r);
     // Re-reads one slot after writing it and reports the write's outcome.
     // `cleared` says which write it was: the slot is expected to be occupied
     // afterwards, or empty, and the answer goes to the matching signal.
@@ -181,6 +199,15 @@ private:
     DeviceInfo device_;
     QVector<model::Channel> channels_;
     int channelsOutstanding_ = 0;
+    QVector<model::Contact> contacts_;
+    // Collected across the frames of one contact stream, and only swapped into
+    // contacts_ once the device says that is all of them: a half-read list must
+    // never be shown as the address book.
+    QVector<model::Contact> incomingContacts_;
+    // Keys with a fetch already queued. A busy mesh repeats one node's advert by
+    // several routes, and an advert that also moved the path pushes twice, so
+    // without this the queue fills with re-reads of the same contact.
+    QSet<QByteArray> contactFetches_;
 };
 
 }  // namespace proto

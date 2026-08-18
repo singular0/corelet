@@ -1,29 +1,15 @@
 #include "ui/channel_delegate.h"
 
-#include <QDateTime>
 #include <QFontMetrics>
-#include <QLocale>
 #include <QPainter>
 #include <QWidget>
 
 #include "model/channel_model.h"
 #include "ui/icons.h"
+#include "ui/row_format.h"
 #include "ui/theme.h"
 
 namespace {
-
-// Sidebar timestamps. A channel list is scanned rather than read, so anything
-// from the last day is the clock time alone; older than that and the date has
-// to come along or the time means nothing.
-QString activityStamp(const QDateTime& when) {
-    if (!when.isValid()) return {};
-    const QString time = QLocale().toString(when.time(), QLocale::ShortFormat);
-    // Timestamps come off the mesh and can sit slightly in the future when a
-    // sender's clock runs fast; that still counts as just now.
-    if (when.secsTo(QDateTime::currentDateTime()) < 24 * 60 * 60) return time;
-    return QStringLiteral("%1 %2").arg(
-        QLocale().toString(when.date(), QStringLiteral("d MMM")), time);
-}
 
 QString iconName(model::ChannelType type) {
     switch (type) {
@@ -99,7 +85,7 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
 
     // --- last message time, right of the name --------------------------------
     const QString stamp =
-        activityStamp(index.data(model::ChannelModel::LastActivityRole).toDateTime());
+        ui::activityStamp(index.data(model::ChannelModel::LastActivityRole).toDateTime());
     if (!stamp.isEmpty()) {
         const int stampWidth = subFm.horizontalAdvance(stamp);
         if (stampWidth + 6 <= topLine.width() - minTextWidth) {

@@ -32,6 +32,9 @@ public:
 Q_SIGNALS:
     void connectRequested();
     void disconnectRequested();
+    // The address book is the node's, not the app's, so the action to open it
+    // belongs beside the node it would be read from.
+    void contactsRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -42,6 +45,7 @@ private:
     void updateBatteryDisplay();
     void updateConnectionAction(bool active);
 
+    QToolButton* contactsButton_ = nullptr;
     QToolButton* infoButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;
     QWidget* batteryRow_ = nullptr;

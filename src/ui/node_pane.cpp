@@ -61,6 +61,28 @@ ElidedLabel* addRow(QVBoxLayout* layout, const QFont& font, const QColor& color,
     return label;
 }
 
+// One of the node header's icon-only actions. The same SVG in three colours;
+// QIcon picks the mode itself, which is cheaper than restyling the button on
+// every hover and enable change.
+QToolButton* headerButton(const QString& icon, const QString& action, int iconSize, qreal dpr) {
+    auto* button = new QToolButton;
+    button->setObjectName(QStringLiteral("iconButton"));
+    button->setIconSize(QSize(iconSize, iconSize));
+    button->setAutoRaise(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setText(action);
+    button->setToolTip(action);
+
+    QIcon set;
+    set.addPixmap(icons::tinted(icon, iconSize, theme::TextMuted, dpr), QIcon::Normal);
+    set.addPixmap(icons::tinted(icon, iconSize, theme::Accent, dpr), QIcon::Active);
+    set.addPixmap(icons::tinted(icon, iconSize, theme::Border, dpr), QIcon::Disabled);
+    button->setIcon(set);
+    button->setEnabled(false);
+    return button;
+}
+
 }  // namespace
 
 NodePane::NodePane(QWidget* parent) : QWidget(parent) {
@@ -72,7 +94,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     layout->setSpacing(0);
 
     // Match the channel header above: the section name takes the spare width
-    // and the one action that belongs to the node sits at its trailing edge.
+    // and the actions that belong to the node sit at its trailing edge.
     auto* header = new QWidget;
     header->setObjectName(QStringLiteral("sidebarHeader"));
     auto* headerLayout = new QHBoxLayout(header);
@@ -86,26 +108,12 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     title->setFont(headerFont);
     title->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
-    infoButton_ = new QToolButton;
-    infoButton_->setObjectName(QStringLiteral("iconButton"));
-    infoButton_->setIconSize(QSize(iconSize_, iconSize_));
-    infoButton_->setAutoRaise(true);
-    infoButton_->setCursor(Qt::PointingHandCursor);
-    infoButton_->setFocusPolicy(Qt::NoFocus);
-    infoButton_->setText(QStringLiteral("Node information"));
-    infoButton_->setToolTip(QStringLiteral("Node information"));
-    QIcon infoIcon;
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::TextMuted,
-                                    devicePixelRatioF()),
-                       QIcon::Normal);
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::Accent,
-                                    devicePixelRatioF()),
-                       QIcon::Active);
-    infoIcon.addPixmap(icons::tinted(QStringLiteral("info"), iconSize_, theme::Border,
-                                    devicePixelRatioF()),
-                       QIcon::Disabled);
-    infoButton_->setIcon(infoIcon);
-    infoButton_->setEnabled(false);
+    // Both of these need a live link before they have anything to show, so both
+    // start disabled and follow the connection.
+    contactsButton_ = headerButton(QStringLiteral("users"), QStringLiteral("Contacts"),
+                                   iconSize_, devicePixelRatioF());
+    infoButton_ = headerButton(QStringLiteral("info"), QStringLiteral("Node information"),
+                               iconSize_, devicePixelRatioF());
 
     connectionButton_ = new QToolButton;
     connectionButton_->setObjectName(QStringLiteral("iconButton"));
@@ -116,6 +124,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     updateConnectionAction(false);
 
     headerLayout->addWidget(title, 1);
+    headerLayout->addWidget(contactsButton_);
     headerLayout->addWidget(infoButton_);
     headerLayout->addWidget(connectionButton_);
 
@@ -151,6 +160,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
             Q_EMIT connectRequested();
     });
     connect(infoButton_, &QToolButton::clicked, this, &NodePane::showDeviceInfo);
+    connect(contactsButton_, &QToolButton::clicked, this, &NodePane::contactsRequested);
 }
 
 void NodePane::setTarget(const proto::ConnectTarget& target) {
@@ -313,6 +323,9 @@ void NodePane::setConnection(const QString& text, const QColor& color, bool acti
     connected_ = connected;
     updateBatteryDisplay();
     infoButton_->setEnabled(connected_ && device_.pubkey.size() == 32);
+    // Unlike the info dialog, this needs no device identity: the address book is
+    // the node's own and reading it only takes a link.
+    contactsButton_->setEnabled(connected_);
     if (active == connectionActive_) return;
 
     updateConnectionAction(active);

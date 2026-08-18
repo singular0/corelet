@@ -37,7 +37,8 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 
 - [x] A node pane with its name, what you are connected to, and battery level.
 - [x] A node info panel with the public key, position and radio settings.
-- [ ] Contacts and adverts.
+- [x] A contacts window: everyone the node has heard from, with their public key, when their last
+      advert arrived and how far it travelled. Nothing can be done to a contact yet.
 - [ ] Telemetry.
 - [ ] Changing device settings.
 

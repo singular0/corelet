@@ -66,14 +66,18 @@ add_executable(corelet
     src/model/history.cpp
     src/model/chat_model.cpp
     src/model/channel_model.cpp
+    src/model/contact_model.cpp
     src/ui/theme.cpp
     src/ui/icons.cpp
+    src/ui/avatar.cpp
     src/ui/byte_limit.cpp
     src/ui/channel_delegate.cpp
+    src/ui/contact_delegate.cpp
     src/ui/message_delegate.cpp
     src/ui/connect_dialog.cpp
     src/ui/add_channel_dialogs.cpp
     src/ui/share_channel_dialog.cpp
+    src/ui/contacts_dialog.cpp
     src/ui/node_pane.cpp
     src/ui/main_window.cpp
 )

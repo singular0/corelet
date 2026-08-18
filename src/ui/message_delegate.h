@@ -1,9 +1,10 @@
 #pragma once
 
 #include <QFont>
-#include <QHash>
 #include <QString>
 #include <QStyledItemDelegate>
+
+#include "ui/avatar.h"
 
 // Draws one message as a bubble: incoming left, our own right, with a header
 // line carrying the sender and the arrival metadata, and a round sender avatar
@@ -44,22 +45,15 @@ private:
     // than laying out another piece of text.
     void paintMark(QPainter* painter, const QRect& mark, bool pending) const;
 
-    // What to draw inside the disc: the sender's own emoji if their name has
-    // one, otherwise its first letter. Memoised because a channel is a handful
-    // of senders repeated over hundreds of rows, and picking the glyph walks
-    // the name by grapheme cluster.
-    QString avatarGlyph(const QString& sender) const;
-
     int viewportWidth_ = 400;
     QFont headerFont_;
     QFont bodyFont_;
     QFont separatorFont_;
-    QFont avatarFont_;
+    Avatar avatar_;
     int avatarSize_ = 30;
     int avatarGap_ = 8;
     int markSize_ = 8;
     int markGap_ = 5;
     int markAllowance_ = 13;
     qreal markPenWidth_ = 1.4;
-    mutable QHash<QString, QString> avatarGlyphs_;
 };

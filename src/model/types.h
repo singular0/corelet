@@ -103,6 +103,57 @@ inline ChannelType channelTypeFromInt(int value) {
     }
 }
 
+// What kind of node a contact is. Unlike a channel's kind, which has to be
+// deduced from its key, this is on the wire: an advert declares it, and the
+// numbers mirror the advert app-data types the daemon masks out of its flags.
+enum class ContactType {
+    Unknown,   // 0, and whatever a later firmware adds
+    Chat,      // 1, somebody to talk to
+    Repeater,  // 2, a mast that relays for everyone else
+    Room,      // 3, a shared room to post in
+    Sensor,    // 4, a node that reports readings
+};
+
+// The wire byte, and settings or a QVariant handing back a plain int, are both
+// values this end does not control: anything unrecognised is a node of a kind
+// this version has no word for, not an index off the end of something.
+inline ContactType contactTypeFromInt(int value) {
+    switch (value) {
+        case int(ContactType::Chat): return ContactType::Chat;
+        case int(ContactType::Repeater): return ContactType::Repeater;
+        case int(ContactType::Room): return ContactType::Room;
+        case int(ContactType::Sensor): return ContactType::Sensor;
+        default: return ContactType::Unknown;
+    }
+}
+
+// One node the device has heard an advert from. Unlike a channel message's
+// sender, this is a real identity: an advert is signed by the key it carries,
+// so the public key is what a contact *is* and the name is only what it calls
+// itself.
+struct Contact {
+    QByteArray pubkey;  // 32 bytes
+    QString name;
+    ContactType type = ContactType::Unknown;
+    // Hops in the route home. 0xFF means no route is known and anything sent
+    // there floods the mesh; 0 is a direct neighbour.
+    int pathLen = 0xFF;
+    // The timestamp the node's most recent advert carried. That is the sender's
+    // own clock rather than ours, and a node that has never been told the time
+    // has none to give, so this can legitimately be invalid.
+    QDateTime lastAdvert;
+
+    bool flooded() const { return pathLen == 0xFF; }
+
+    // An advert need not carry a name at all. The first bytes of the key are
+    // how the daemon's logs name such a node, and they are at least unique.
+    QString displayName() const {
+        if (!name.isEmpty()) return name;
+        if (pubkey.isEmpty()) return QStringLiteral("Unknown node");
+        return QString::fromLatin1(pubkey.left(3).toHex());
+    }
+};
+
 struct Message {
     // How far one of our own sends has got. Meaningless for incoming messages,
     // and for anything read back from history: the app writes a message down

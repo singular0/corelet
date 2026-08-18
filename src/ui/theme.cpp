@@ -65,6 +65,9 @@ void apply(QApplication& app) {
         QMainWindow, QWidget { background: %1; color: %2; }
         QListView { border: none; background: %1; }
         QListView#channelList { background: %3; }
+        /* The address book is a panel inside a dialog rather than a column of
+           the window, so unlike the two lists above it needs an edge. */
+        QListView#contactList { border: 1px solid %5; border-radius: 3px; }
         QLineEdit {
             background: %4; border: 1px solid %5; border-radius: 4px;
             padding: 5px 8px; color: %2; selection-background-color: %6;

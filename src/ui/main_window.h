@@ -53,6 +53,8 @@ private:
     // Points the client at a target, replacing whatever it was talking to.
     void connectTo(const proto::ConnectTarget& target);
     void openConnectDialog();
+    // The address book, which lives on the node: nothing to show without a link.
+    void showContacts();
     // The add button's menu: one item per kind of channel, since which kind is
     // being added is settled before any of them has a field to fill in.
     void showAddChannelMenu();

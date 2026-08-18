@@ -40,6 +40,15 @@ QDateTime messageTime(quint32 wire) {
     return QDateTime::fromSecsSinceEpoch(wire);
 }
 
+// An advert's timestamp comes from the advertising node's clock, and a node
+// that has never been told the time advertises from 1970. There is nothing to
+// fall back on the way an arriving message has its arrival, so an implausible
+// one becomes no time at all and the UI says so.
+QDateTime advertTime(quint32 wire) {
+    if (qint64(wire) < PlausibleEpoch) return {};
+    return QDateTime::fromSecsSinceEpoch(wire);
+}
+
 // Channel messages carry no sender key; the sender's name is prepended to the
 // text as "Name: body" by the sending node. Split it back out for display,
 // tolerating a body that legitimately contains a colon.
@@ -128,6 +137,8 @@ void CompanionClient::resetConnection() {
     // may or may not open.
     storageAvailable_ = false;
     channelsOutstanding_ = 0;
+    incomingContacts_.clear();
+    contactFetches_.clear();
     replyTimer_->stop();
     batteryTimer_->stop();
 
@@ -238,12 +249,16 @@ void CompanionClient::handlePush(quint8 code, Reader& r) {
         case PushAdvert:
         case PushNewAdvert:
         case PushPathUpdated:
+            // All three carry the node's key and nothing else, so what changed
+            // about it has to be asked for; a node heard for the first time and
+            // one heard again are the same fetch.
+            requestContact(r.take(32));
+            break;
         case PushSendConfirmed:
         case PushLogRxData:
         default:
-            // v1 shows channels only. The rest of the push surface (contact
-            // discovery, per-message ack confirmation, raw RX logging) is
-            // deliberately ignored rather than half-handled.
+            // The rest of the push surface -- per-message ack confirmation, raw
+            // RX logging -- is deliberately ignored rather than half-handled.
             break;
     }
 }
@@ -255,6 +270,7 @@ void CompanionClient::handlePush(quint8 code, Reader& r) {
 void CompanionClient::beginHandshake() {
     channels_.clear();
     channelsOutstanding_ = 0;
+    contacts_.clear();
 
     // APP_START: version byte, six reserved, then the app name.
     Writer start(CmdAppStart);
@@ -301,6 +317,10 @@ void CompanionClient::beginHandshake() {
     // one and keep those with a non-zero key.
     channelsOutstanding_ = MaxChannels;
     for (int i = 0; i < MaxChannels; i++) requestChannel(i);
+
+    // Behind the channels: the sidebar is what the window opens on, and the
+    // address book is a screen the user has to ask for.
+    requestContacts();
 }
 
 void CompanionClient::requestChannel(int index) {
@@ -504,6 +524,88 @@ void CompanionClient::readBackChannel(int index, bool cleared) {
         report(ch.index, true, {});
         return true;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Contacts
+// ---------------------------------------------------------------------------
+
+model::Contact CompanionClient::parseContact(Reader& r) {
+    // pubkey(32) type(1) flags(1) out_path_len(1) out_path(64) name(32)
+    // last_advert(4) lat(4) lon(4) last_modified(4)
+    model::Contact c;
+    c.pubkey = r.take(32);
+    c.type = model::contactTypeFromInt(r.u8());
+    r.skip(1);  // flags: nothing above the protocol reads them yet
+    c.pathLen = r.u8();
+    r.skip(ContactPathField);
+    c.name = r.fixedString(ContactNameField);
+    c.lastAdvert = advertTime(r.u32());
+    // The advertised location and the store's own modification time follow.
+    // Nothing shows either yet, so they are left where they are rather than
+    // carried around unread.
+    return c;
+}
+
+void CompanionClient::requestContacts() {
+    // No `since` filter, which the daemon would accept: the app keeps no
+    // contact cache between sessions, so an incremental answer would leave it
+    // holding a list it has no way to complete.
+    Writer w(CmdGetContacts);
+    enqueue(w.bytes(), [this](quint8 code, Reader& r) {
+        switch (code) {
+            case RespContactsStart:
+                incomingContacts_.clear();
+                return false;  // the count only; the contacts follow
+            case RespContact: {
+                const model::Contact contact = parseContact(r);
+                if (r.ok() && contact.pubkey.size() == 32) incomingContacts_.append(contact);
+                return false;
+            }
+            default:
+                // END_OF_CONTACTS, or an ERR from a far end with nothing to
+                // say: either way what has arrived is now the address book,
+                // and an empty one is worth announcing so a stale list from
+                // the previous session goes away.
+                contacts_ = incomingContacts_;
+                incomingContacts_.clear();
+                Q_EMIT contactsChanged(contacts_);
+                return true;
+        }
+    });
+}
+
+void CompanionClient::requestContact(const QByteArray& pubkey) {
+    if (pubkey.size() != 32) return;
+    if (contactFetches_.contains(pubkey)) return;
+    contactFetches_.insert(pubkey);
+
+    Writer w(CmdGetContactByKey);
+    w.tail(pubkey);
+    enqueue(
+        w.bytes(),
+        [this, pubkey](quint8 code, Reader& r) {
+            contactFetches_.remove(pubkey);
+            // A NOT_FOUND is ordinary: the store is bounded, and a contact can
+            // be dropped between the push and this reading it back.
+            if (code != RespContact) return true;
+            const model::Contact contact = parseContact(r);
+            if (r.ok() && contact.pubkey.size() == 32) upsertContact(contact);
+            return true;
+        },
+        [this, pubkey] { contactFetches_.remove(pubkey); });
+}
+
+void CompanionClient::upsertContact(const model::Contact& contact) {
+    // The key is the identity: a node that renamed itself is the same contact,
+    // and a second row for it would be a second person.
+    auto it = std::find_if(contacts_.begin(), contacts_.end(),
+                           [&](const model::Contact& c) { return c.pubkey == contact.pubkey; });
+    if (it != contacts_.end())
+        *it = contact;
+    else
+        contacts_.append(contact);
+    Q_EMIT contactChanged(contact);
 }
 
 // ---------------------------------------------------------------------------

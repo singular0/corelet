@@ -168,12 +168,15 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
 
 - **`protocol/`** — wire constants, frame codec, transports, and `CompanionClient`, the state
   machine that owns the link.
-- **`model/`** — `Channel`/`Message` value types, the SQLite `History`, and two `QAbstractListModel`s
-  (`ChannelModel` for the sidebar, `ChatModel` for the open conversation).
+- **`model/`** — `Channel`/`Contact`/`Message` value types, the SQLite `History`, and three
+  `QAbstractListModel`s (`ChannelModel` for the sidebar, `ChatModel` for the open conversation,
+  `ContactModel` for the address book).
 - **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, `NodePane`, the
-  add/share channel dialogs, two item delegates, the dark `theme`, and SVG icons in a `.qrc`
-  (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
-  `debian/copyright`, which are what the README's license section points at).
+  add/share channel and contacts dialogs, three item delegates, the dark `theme`, and SVG icons in
+  a `.qrc` (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
+  `debian/copyright`, which are what the README's license section points at). Anything two lists
+  have to say the same way is shared rather than copied: `row_format.h` for a last-heard stamp and
+  a hop count, `Avatar` for the disc a name is drawn as.
 
 This is a client only. All radio work, crypto and channel state live in `coreletd`
 (`../coreletd`) or the device firmware.
@@ -199,6 +202,13 @@ Violating any of these produces bugs that only show up against a real device:
 - **A channel's slot number is only its current wire address**, never its persistent identity or
   row. `GET_CHANNEL` answers for all 8 slots and unused ones have an all-zero key; slots are sparse,
   and rows shift on re-enumeration. Persistent state uses a fingerprint of the channel key.
+- **A contact push says only *who*.** `PUSH_ADVERT`, `PUSH_NEW_ADVERT` and `PUSH_PATH_UPDATED`
+  carry the node's public key and nothing else, so what changed about it is a
+  `GET_CONTACT_BY_KEY` of its own. `CompanionClient` allows one outstanding fetch per key: a busy
+  mesh repeats an advert by several routes, and an advert that also moved the path pushes twice.
+  Nothing about contacts is cached on this side, unlike channel names, which are kept so the
+  sidebar has something to draw while offline — the daemon's store is the authority, and the
+  address book is a window somebody opens rather than the view the app lives in.
 - **The wire says nothing about channel kind.** `ChannelType` is deduced in
   `model::Channel::classify` from the key, mirroring how the daemon builds them (constant public
   key, SHA-256 of the name including `#` for hashtags). The offline cache stores the resolved type,
