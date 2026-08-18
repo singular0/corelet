@@ -12,12 +12,6 @@ namespace model {
 
 namespace {
 
-// Qt distinguishes null and non-null empty byte arrays when binding them.
-// History does not: every empty key is the direct-message conversation.
-QVariant storedChannel(const QByteArray& channelKeyFingerprint) {
-    return channelKeyFingerprint.isEmpty() ? QVariant() : QVariant(channelKeyFingerprint);
-}
-
 // SQLite's own words are the only useful part of a failure -- "attempt to write
 // a readonly database", "disk I/O error" -- and they are what the user needs to
 // see, since only they can do anything about it.
@@ -26,9 +20,11 @@ QString sqlError(const QSqlError& error) {
     return text.isEmpty() ? QStringLiteral("the database reported no reason") : text;
 }
 
-Message storedMessage(const QSqlQuery& query, int channelIndex) {
+Message storedMessage(const QSqlQuery& query, const Conversation& conversation,
+                      int channelIndex) {
     Message msg;
-    msg.channelIndex = channelIndex;
+    msg.conversation = conversation;
+    msg.channelIndex = conversation.isChannel() ? channelIndex : -1;
     msg.timestamp = QDateTime::fromSecsSinceEpoch(query.value(0).toLongLong());
     msg.text = query.value(1).toString();
     msg.sender = query.value(2).toString();
@@ -40,6 +36,15 @@ Message storedMessage(const QSqlQuery& query, int channelIndex) {
     }
     return msg;
 }
+
+// The two columns that together are one conversation, bound in the order every
+// statement here lists them.
+void bindConversation(QSqlQuery& query, const Conversation& conversation) {
+    query.addBindValue(int(conversation.kind));
+    query.addBindValue(conversation.id);
+}
+
+constexpr auto SelectColumns = "timestamp, text, sender, outgoing, snr, path_len";
 
 }  // namespace
 
@@ -61,13 +66,13 @@ QByteArray History::orphanDeviceId() {
     return QByteArray(DeviceIdSize, '\0');
 }
 
-QByteArray History::orphanChannel(int wireSlot) {
-    QByteArray fingerprint(ChannelFingerprintSize, '\0');
+Conversation History::orphanChannel(int wireSlot) {
+    QByteArray fingerprint(Conversation::IdSize, '\0');
     // Slots are a single wire byte; anything else is not a slot at all and
     // shares the one conversation 0xFF stands for.
-    fingerprint[ChannelFingerprintSize - 1] =
+    fingerprint[Conversation::IdSize - 1] =
         char(wireSlot < 0 || wireSlot > 0xFE ? 0xFF : wireSlot);
-    return fingerprint;
+    return Conversation::channel(fingerprint);
 }
 
 HistoryResult History::preflight(const QByteArray& deviceId) {
@@ -78,9 +83,8 @@ HistoryResult History::preflight(const QByteArray& deviceId) {
 }
 
 HistoryMessages History::messages(const QByteArray& deviceId,
-                                  const QByteArray& channelKeyFingerprint,
-                                  int channelIndex) const {
-    if (!validScope(deviceId, channelKeyFingerprint, channelIndex))
+                                  const Conversation& conversation, int channelIndex) const {
+    if (deviceId.size() != DeviceIdSize || !conversation.isValid())
         return {HistoryResult::failure(QStringLiteral("the conversation has no identity")), {}};
 
     QString error;
@@ -89,17 +93,18 @@ HistoryMessages History::messages(const QByteArray& deviceId,
 
     QSqlQuery query(db);
     query.setForwardOnly(true);
-    if (!query.prepare(QStringLiteral(
-            "SELECT timestamp, text, sender, outgoing, snr, path_len "
-            "FROM messages WHERE channel IS ? ORDER BY id DESC LIMIT ?")))
+    if (!query.prepare(QStringLiteral("SELECT %1 FROM messages "
+                                      "WHERE conv_kind = ? AND conv_id = ? "
+                                      "ORDER BY id DESC LIMIT ?")
+                           .arg(QLatin1String(SelectColumns))))
         return {HistoryResult::failure(sqlError(query.lastError())), {}};
-    query.addBindValue(storedChannel(channelKeyFingerprint));
-    query.addBindValue(MaxPerChannel);
+    bindConversation(query, conversation);
+    query.addBindValue(MaxPerConversation);
     if (!query.exec()) return {HistoryResult::failure(sqlError(query.lastError())), {}};
 
     QVector<Message> result;
-    result.reserve(MaxPerChannel);
-    while (query.next()) result.append(storedMessage(query, channelIndex));
+    result.reserve(MaxPerConversation);
+    while (query.next()) result.append(storedMessage(query, conversation, channelIndex));
 
     // The descending index walk makes LIMIT cheap; the view still consumes
     // messages in their original append order.
@@ -108,9 +113,9 @@ HistoryMessages History::messages(const QByteArray& deviceId,
 }
 
 HistoryLatest History::latestMessage(const QByteArray& deviceId,
-                                     const QByteArray& channelKeyFingerprint,
+                                     const Conversation& conversation,
                                      int channelIndex) const {
-    if (!validScope(deviceId, channelKeyFingerprint, channelIndex))
+    if (deviceId.size() != DeviceIdSize || !conversation.isValid())
         return {HistoryResult::failure(QStringLiteral("the conversation has no identity")), {}};
 
     QString error;
@@ -119,20 +124,21 @@ HistoryLatest History::latestMessage(const QByteArray& deviceId,
 
     QSqlQuery query(db);
     query.setForwardOnly(true);
-    if (!query.prepare(QStringLiteral(
-            "SELECT timestamp, text, sender, outgoing, snr, path_len "
-            "FROM messages WHERE channel IS ? ORDER BY id DESC LIMIT 1")))
+    if (!query.prepare(QStringLiteral("SELECT %1 FROM messages "
+                                      "WHERE conv_kind = ? AND conv_id = ? "
+                                      "ORDER BY id DESC LIMIT 1")
+                           .arg(QLatin1String(SelectColumns))))
         return {HistoryResult::failure(sqlError(query.lastError())), {}};
-    query.addBindValue(storedChannel(channelKeyFingerprint));
+    bindConversation(query, conversation);
     if (!query.exec()) return {HistoryResult::failure(sqlError(query.lastError())), {}};
     // No row is an empty conversation, which is a perfectly good answer.
     if (!query.next()) return {HistoryResult::success(), std::nullopt};
-    return {HistoryResult::success(), storedMessage(query, channelIndex)};
+    return {HistoryResult::success(), storedMessage(query, conversation, channelIndex)};
 }
 
-HistoryResult History::append(const QByteArray& deviceId,
-                              const QByteArray& channelKeyFingerprint, const Message& msg) {
-    if (!validScope(deviceId, channelKeyFingerprint, msg.channelIndex))
+HistoryResult History::append(const QByteArray& deviceId, const Conversation& conversation,
+                              const Message& msg) {
+    if (deviceId.size() != DeviceIdSize || !conversation.isValid())
         return HistoryResult::failure(QStringLiteral("the conversation has no identity"));
 
     QString error;
@@ -143,13 +149,13 @@ HistoryResult History::append(const QByteArray& deviceId,
     QSqlQuery insert(db);
     if (!insert.prepare(QStringLiteral(
             "INSERT INTO messages "
-            "(channel, timestamp, text, sender, outgoing, snr, path_len) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)"))) {
+            "(conv_kind, conv_id, timestamp, text, sender, outgoing, snr, path_len) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"))) {
         const QString reason = sqlError(insert.lastError());
         db.rollback();
         return HistoryResult::failure(reason);
     }
-    insert.addBindValue(storedChannel(channelKeyFingerprint));
+    bindConversation(insert, conversation);
     insert.addBindValue(msg.timestamp.toSecsSinceEpoch());
     insert.addBindValue(msg.text.isNull() ? QStringLiteral("") : msg.text);
     insert.addBindValue(msg.sender.isNull() ? QStringLiteral("") : msg.sender);
@@ -162,20 +168,20 @@ HistoryResult History::append(const QByteArray& deviceId,
         return HistoryResult::failure(reason);
     }
 
-    // The channel/id index finds the retention boundary without scanning any
-    // other conversation or rewriting the database.
+    // The conversation/id index finds the retention boundary without scanning
+    // any other conversation or rewriting the database.
     QSqlQuery trim(db);
     if (!trim.prepare(QStringLiteral(
-            "DELETE FROM messages WHERE channel IS ? AND id < COALESCE(("
-            "SELECT id FROM messages WHERE channel IS ? "
+            "DELETE FROM messages WHERE conv_kind = ? AND conv_id = ? AND id < COALESCE(("
+            "SELECT id FROM messages WHERE conv_kind = ? AND conv_id = ? "
             "ORDER BY id DESC LIMIT 1 OFFSET ?), 0)"))) {
         const QString reason = sqlError(trim.lastError());
         db.rollback();
         return HistoryResult::failure(reason);
     }
-    trim.addBindValue(storedChannel(channelKeyFingerprint));
-    trim.addBindValue(storedChannel(channelKeyFingerprint));
-    trim.addBindValue(MaxPerChannel - 1);
+    bindConversation(trim, conversation);
+    bindConversation(trim, conversation);
+    trim.addBindValue(MaxPerConversation - 1);
     if (!trim.exec()) {
         const QString reason = sqlError(trim.lastError());
         db.rollback();
@@ -190,10 +196,8 @@ HistoryResult History::append(const QByteArray& deviceId,
     return HistoryResult::success();
 }
 
-HistoryResult History::remove(const QByteArray& deviceId,
-                              const QByteArray& channelKeyFingerprint) {
-    if (deviceId.size() != DeviceIdSize ||
-        channelKeyFingerprint.size() != ChannelFingerprintSize)
+HistoryResult History::remove(const QByteArray& deviceId, const Conversation& conversation) {
+    if (deviceId.size() != DeviceIdSize || !conversation.isValid())
         return HistoryResult::failure(QStringLiteral("the conversation has no identity"));
 
     QString error;
@@ -201,18 +205,64 @@ HistoryResult History::remove(const QByteArray& deviceId,
     if (!db.isOpen()) return HistoryResult::failure(error);
 
     QSqlQuery query(db);
-    if (!query.prepare(QStringLiteral("DELETE FROM messages WHERE channel IS ?")))
+    if (!query.prepare(QStringLiteral(
+            "DELETE FROM messages WHERE conv_kind = ? AND conv_id = ?")))
         return HistoryResult::failure(sqlError(query.lastError()));
-    query.addBindValue(storedChannel(channelKeyFingerprint));
+    bindConversation(query, conversation);
     if (!query.exec()) return HistoryResult::failure(sqlError(query.lastError()));
     return HistoryResult::success();
 }
 
-bool History::validScope(const QByteArray& deviceId,
-                         const QByteArray& channelKeyFingerprint, int channelIndex) {
-    if (deviceId.size() != DeviceIdSize) return false;
-    if (channelIndex < 0) return channelKeyFingerprint.isEmpty();
-    return channelKeyFingerprint.size() == ChannelFingerprintSize;
+HistoryConversations History::directConversations(const QByteArray& deviceId) const {
+    if (deviceId.size() != DeviceIdSize)
+        return {HistoryResult::failure(QStringLiteral("no device identity is known")), {}};
+
+    QString error;
+    const QSqlDatabase db = databaseFor(deviceId, &error);
+    if (!db.isOpen()) return {HistoryResult::failure(error), {}};
+
+    QSqlQuery query(db);
+    query.setForwardOnly(true);
+    // Newest first, so the caller has the conversations somebody is actually in
+    // at the front of the list whatever it decides to do with the order.
+    if (!query.prepare(QStringLiteral(
+            "SELECT conv_id FROM messages WHERE conv_kind = ? "
+            "GROUP BY conv_id ORDER BY MAX(id) DESC")))
+        return {HistoryResult::failure(sqlError(query.lastError())), {}};
+    query.addBindValue(int(ConversationKind::Direct));
+    if (!query.exec()) return {HistoryResult::failure(sqlError(query.lastError())), {}};
+
+    QVector<Conversation> result;
+    while (query.next()) {
+        const Conversation peer = Conversation::direct(query.value(0).toByteArray());
+        // A row of some other shape is not a peer this build can address; it is
+        // not worth a failure either, since every other row still reads.
+        if (peer.isValid()) result.append(peer);
+    }
+    return {HistoryResult::success(), std::move(result)};
+}
+
+HistoryResult History::resolvePeer(const QByteArray& deviceId, const QByteArray& peerKey) {
+    if (deviceId.size() != DeviceIdSize || peerKey.size() != Conversation::IdSize)
+        return HistoryResult::failure(QStringLiteral("the conversation has no identity"));
+
+    QString error;
+    const QSqlDatabase db = databaseFor(deviceId, &error);
+    if (!db.isOpen()) return HistoryResult::failure(error);
+
+    QSqlQuery query(db);
+    // Only the prefix rows move: a conversation already under the whole key is
+    // the one they are joining. Two peers sharing six bytes of key is the same
+    // 2^48 assumption the daemon makes when it matches an incoming message to a
+    // contact, so nothing here is more optimistic than the wire already is.
+    if (!query.prepare(QStringLiteral(
+            "UPDATE messages SET conv_id = ? WHERE conv_kind = ? AND conv_id = ?")))
+        return HistoryResult::failure(sqlError(query.lastError()));
+    query.addBindValue(peerKey);
+    query.addBindValue(int(ConversationKind::Direct));
+    query.addBindValue(peerKey.left(Conversation::PeerPrefixSize));
+    if (!query.exec()) return HistoryResult::failure(sqlError(query.lastError()));
+    return HistoryResult::success();
 }
 
 QSqlDatabase History::databaseFor(const QByteArray& deviceId, QString* error) const {
@@ -312,10 +362,10 @@ QString History::migrate(QSqlDatabase& db) {
     if (found < SchemaVersion) {
         // Each version's steps run in one transaction with the version bump
         // that records them, so a database is either wholly at the version it
-        // claims or wholly back where it started. Version 1 is the first shape
-        // there was, so there is nothing to step up from yet; what an older
-        // database needs goes here, in ascending order, as the shape changes.
+        // claims or wholly back where it started. Version 0 is a database with
+        // nothing in it yet, which the current DDL below builds directly.
         if (!db.transaction()) return sqlError(db.lastError());
+        if (found >= 1) error = upgradeToConversations(db);
         step(QStringLiteral("PRAGMA user_version = %1").arg(SchemaVersion));
         if (!error.isEmpty()) {
             db.rollback();
@@ -334,22 +384,111 @@ QString History::migrate(QSqlDatabase& db) {
     // a version but no table by an open that failed between the two.
     step(QStringLiteral("CREATE TABLE IF NOT EXISTS messages ("
                         "id INTEGER PRIMARY KEY, "
-                        // NULL is the device's direct-message conversation;
-                        // channel conversations use a 32-byte fingerprint.
-                        "channel BLOB, "
+                        // model::ConversationKind, and the identity that kind
+                        // is addressed by: a channel key's SHA-256, or a peer's
+                        // public key -- or the six bytes of one the wire gave,
+                        // until the address book resolves it.
+                        "conv_kind INTEGER NOT NULL, "
+                        "conv_id BLOB NOT NULL, "
                         "timestamp INTEGER NOT NULL, "
                         "text TEXT NOT NULL, "
                         "sender TEXT NOT NULL DEFAULT '', "
                         "outgoing INTEGER NOT NULL DEFAULT 0, "
                         "snr REAL, "
                         "path_len INTEGER)"));
-    step(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_by_channel "
-                        "ON messages(channel, id)"));
+    step(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_by_conversation "
+                        "ON messages(conv_kind, conv_id, id)"));
     // Written back even when it is already this, because it is the one *write*
     // an open performs: opening a database says nothing about being able to add
     // to it, and a read-only file or a full card has to fail here rather than
     // while storing a message the node has already discarded.
     step(QStringLiteral("PRAGMA user_version = %1").arg(SchemaVersion));
+    return error;
+}
+
+QString History::upgradeToConversations(QSqlDatabase& db) {
+    QString error;
+    const auto step = [&](const QString& statement) {
+        if (!error.isEmpty()) return;
+        QSqlQuery query(db);
+        if (!query.exec(statement)) error = sqlError(query.lastError());
+    };
+
+    // Version 1 kept one nullable `channel` column: a fingerprint for a channel
+    // and NULL for the single conversation every direct message from every peer
+    // shared. The rows move rather than the column being widened, because what
+    // a direct row belongs to has to be worked out one row at a time.
+    step(QStringLiteral("ALTER TABLE messages RENAME TO messages_v1"));
+    step(QStringLiteral("DROP INDEX IF EXISTS messages_by_channel"));
+    step(QStringLiteral("CREATE TABLE messages ("
+                        "id INTEGER PRIMARY KEY, "
+                        "conv_kind INTEGER NOT NULL, "
+                        "conv_id BLOB NOT NULL, "
+                        "timestamp INTEGER NOT NULL, "
+                        "text TEXT NOT NULL, "
+                        "sender TEXT NOT NULL DEFAULT '', "
+                        "outgoing INTEGER NOT NULL DEFAULT 0, "
+                        "snr REAL, "
+                        "path_len INTEGER)"));
+    // Channel rows carry their identity already, so they copy across whole and
+    // keep their ids -- which is the order the retention trim reads them in.
+    step(QStringLiteral("INSERT INTO messages "
+                        "(id, conv_kind, conv_id, timestamp, text, sender, outgoing, snr, "
+                        "path_len) "
+                        "SELECT id, %1, channel, timestamp, text, sender, outgoing, snr, "
+                        "path_len FROM messages_v1 WHERE channel IS NOT NULL")
+                  .arg(int(ConversationKind::Channel)));
+    if (!error.isEmpty()) return error;
+
+    // Direct rows kept the peer as the hex of the six-byte prefix the daemon
+    // matched on, in the column that now holds a sender's name. Decoding it is
+    // what gives each peer its own conversation, and there is no portable SQL
+    // for that -- so the rows are carried over here, bounded by the version 1
+    // retention cap of 500.
+    QVector<QVariantList> directRows;
+    {
+        QSqlQuery read(db);
+        read.setForwardOnly(true);
+        if (!read.exec(QStringLiteral(
+                "SELECT id, timestamp, text, sender, outgoing, snr, path_len "
+                "FROM messages_v1 WHERE channel IS NULL ORDER BY id")))
+            return sqlError(read.lastError());
+        while (read.next()) {
+            QVariantList row;
+            for (int column = 0; column < 7; column++) row.append(read.value(column));
+            directRows.append(row);
+        }
+    }
+
+    QSqlQuery insert(db);
+    if (!insert.prepare(QStringLiteral(
+            "INSERT INTO messages "
+            "(id, conv_kind, conv_id, timestamp, text, sender, outgoing, snr, path_len) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")))
+        return sqlError(insert.lastError());
+
+    for (const QVariantList& row : directRows) {
+        const QByteArray prefix = QByteArray::fromHex(row.at(3).toString().toLatin1());
+        insert.addBindValue(row.at(0));
+        insert.addBindValue(int(ConversationKind::Direct));
+        // Anything that is not the prefix this version wrote leaves a message
+        // whose peer cannot be recovered. An all-zero prefix is not a key
+        // anybody holds, so those share one conversation of their own rather
+        // than being dropped or filed under somebody real.
+        insert.addBindValue(prefix.size() == Conversation::PeerPrefixSize
+                                ? prefix
+                                : QByteArray(Conversation::PeerPrefixSize, '\0'));
+        insert.addBindValue(row.at(1));
+        insert.addBindValue(row.at(2));
+        // The prefix was never a name to show; the peer is the conversation now.
+        insert.addBindValue(QStringLiteral(""));
+        insert.addBindValue(row.at(4));
+        insert.addBindValue(row.at(5));
+        insert.addBindValue(row.at(6));
+        if (!insert.exec()) return sqlError(insert.lastError());
+    }
+
+    step(QStringLiteral("DROP TABLE messages_v1"));
     return error;
 }
 

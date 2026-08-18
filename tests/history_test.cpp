@@ -69,8 +69,10 @@ int main(int argc, char* argv[]) {
 
     const QByteArray deviceA(32, '\x11');
     const QByteArray deviceB(32, '\x22');
-    const QByteArray channelA(32, '\x33');
-    const QByteArray channelB(32, '\x44');
+    const model::Conversation channelA = model::Conversation::channel(QByteArray(32, '\x33'));
+    const model::Conversation channelB = model::Conversation::channel(QByteArray(32, '\x44'));
+    const QByteArray peerKey = QByteArray::fromHex("a1b2c3d4e5f6") + QByteArray(26, '\x77');
+    const model::Conversation peer = model::Conversation::direct(peerKey);
 
     {
         model::History history(directory.path());
@@ -86,7 +88,7 @@ int main(int argc, char* argv[]) {
         nameless.sender = QString();
         history.append(deviceA, channelB, nameless);
         history.append(deviceB, channelA, message(7, 3));
-        history.append(deviceA, {}, message(-1, 4));
+        history.append(deviceA, peer, message(-1, 4));
 
         const QString pathA = databasePath(directory, deviceA);
         const QString pathB = databasePath(directory, deviceB);
@@ -100,6 +102,8 @@ int main(int argc, char* argv[]) {
             !check(a.messages.size() == 1, "device A channel A has one message") ||
             !check(a.messages.at(0).channelIndex == 9,
                    "stored message is rebound to current slot") ||
+            !check(a.messages.at(0).conversation == channelA,
+                   "a stored message knows the conversation it was read from") ||
             !check(a.messages.at(0).text == QStringLiteral("message-1"),
                    "message text round trips") ||
             !check(!a.messages.at(0).hasSignal, "absent signal remains absent"))
@@ -121,8 +125,21 @@ int main(int argc, char* argv[]) {
                    "device B message round trips") ||
             !check(b.messages.at(0).hasSignal && b.messages.at(0).pathLen == 2,
                    "signal metadata round trips") ||
-            !check(history.messages(deviceA, QByteArray(""), -1).messages.size() == 1,
-                   "direct messages use their own scope"))
+            !check(history.messages(deviceA, peer).messages.size() == 1,
+                   "a peer's direct messages are their own conversation") ||
+            !check(history.messages(deviceA, peer).messages.at(0).channelIndex == -1,
+                   "a direct message carries no channel slot"))
+            return 1;
+
+        // A conversation is the kind *and* the identity: a channel whose key
+        // fingerprint happened to equal a peer's key would still be a different
+        // conversation, and nothing may read one as the other.
+        const model::Conversation collision = model::Conversation::channel(peerKey);
+        history.append(deviceA, collision, message(5, 7));
+        if (!check(history.messages(deviceA, peer).messages.size() == 1,
+                   "a channel does not join the direct conversation with the same id") ||
+            !check(history.messages(deviceA, collision, 5).messages.size() == 1,
+                   "the channel keeps its own message"))
             return 1;
 
         // Scopes the app could not resolve: a message it cannot place is still
@@ -146,13 +163,13 @@ int main(int argc, char* argv[]) {
                    "an orphan does not join the channel it could not be placed in"))
             return 1;
 
-        for (int i = 0; i <= model::History::MaxPerChannel; ++i)
+        for (int i = 0; i <= model::History::MaxPerConversation; ++i)
             history.append(deviceA, channelA, message(3, 1000 + i));
 
         const QVector<model::Message> retained =
             history.messages(deviceA, channelA, 3).messages;
         const model::HistoryLatest latest = history.latestMessage(deviceA, channelA, 12);
-        if (!check(retained.size() == model::History::MaxPerChannel,
+        if (!check(retained.size() == model::History::MaxPerConversation,
                    "channel history is capped") ||
             !check(retained.first().text == QStringLiteral("message-1001"),
                    "retention drops the oldest messages") ||
@@ -170,7 +187,7 @@ int main(int argc, char* argv[]) {
     {
         model::History history(directory.path());
         if (!check(history.messages(deviceA, channelA, 3).messages.size() ==
-                       model::History::MaxPerChannel,
+                       model::History::MaxPerConversation,
                    "history survives reopening"))
             return 1;
 
@@ -181,8 +198,132 @@ int main(int argc, char* argv[]) {
                    "channel removal leaves sibling channels intact") ||
             !check(history.messages(deviceB, channelA, 7).messages.size() == 1,
                    "channel removal leaves other devices intact") ||
-            !check(history.messages(deviceA, {}, -1).messages.size() == 1,
+            !check(history.messages(deviceA, peer).messages.size() == 1,
                    "channel removal leaves direct messages intact"))
+            return 1;
+    }
+
+    // A direct conversation exists because something was said in it: nothing on
+    // the node enumerates them, so the sidebar is built from what is stored.
+    {
+        const QByteArray deviceC(32, '\x33');
+        const QByteArray otherKey = QByteArray::fromHex("0102030405060708") +
+                                    QByteArray(24, '\x09');
+        const model::Conversation other = model::Conversation::direct(otherKey);
+        // The peer of a message collected before the address book could name it:
+        // all the wire carries is the prefix the daemon matched on.
+        const model::Conversation unresolved =
+            model::Conversation::direct(otherKey.left(model::Conversation::PeerPrefixSize));
+
+        model::History history(directory.path());
+        history.append(deviceC, channelA, message(1, 10));
+        history.append(deviceC, peer, message(-1, 11));
+        history.append(deviceC, unresolved, message(-1, 12));
+
+        const model::HistoryConversations listed = history.directConversations(deviceC);
+        if (!check(bool(listed.result), "listing direct conversations succeeds") ||
+            !check(listed.conversations.size() == 2,
+                   "each peer is one direct conversation and channels are not listed") ||
+            !check(listed.conversations.contains(peer) &&
+                       listed.conversations.contains(unresolved),
+                   "a peer known only by its prefix is still a conversation"))
+            return 1;
+
+        // The whole key turning up is what the prefix rows were waiting for.
+        history.append(deviceC, other, message(-1, 13));
+        if (!check(bool(history.resolvePeer(deviceC, otherKey)), "resolving a peer succeeds") ||
+            !check(history.messages(deviceC, other).messages.size() == 2,
+                   "prefix messages join the conversation with the whole key") ||
+            !check(history.messages(deviceC, unresolved).messages.isEmpty(),
+                   "nothing is left under the prefix") ||
+            !check(history.messages(deviceC, other).messages.at(0).text ==
+                       QStringLiteral("message-12"),
+                   "the adopted message keeps its place in the order") ||
+            !check(history.messages(deviceC, peer).messages.size() == 1,
+                   "resolving one peer leaves another alone") ||
+            !check(history.directConversations(deviceC).conversations.size() == 2,
+                   "the resolved conversation is no longer counted twice"))
+            return 1;
+    }
+
+    // A version 1 database -- one nullable channel column, every direct message
+    // from every peer sharing one conversation and identified by the hex of the
+    // prefix in its sender column -- is stepped up rather than abandoned.
+    {
+        const QByteArray legacy(32, '\x44');
+        const QString path = databasePath(directory, legacy);
+        const QString channelHex = QString::fromLatin1(channelA.id.toHex());
+        if (!check(runSql(path,
+                          {QStringLiteral("PRAGMA user_version = 1"),
+                           QStringLiteral("CREATE TABLE messages (id INTEGER PRIMARY KEY, "
+                                          "channel BLOB, timestamp INTEGER NOT NULL, "
+                                          "text TEXT NOT NULL, sender TEXT NOT NULL DEFAULT '', "
+                                          "outgoing INTEGER NOT NULL DEFAULT 0, snr REAL, "
+                                          "path_len INTEGER)"),
+                           QStringLiteral("CREATE INDEX messages_by_channel "
+                                          "ON messages(channel, id)"),
+                           QStringLiteral("INSERT INTO messages "
+                                          "(channel, timestamp, text, sender, outgoing, snr, "
+                                          "path_len) VALUES "
+                                          "(x'%1', 1700000001, 'on a channel', 'someone', 0, "
+                                          "-3.5, 2)")
+                               .arg(channelHex),
+                           QStringLiteral("INSERT INTO messages "
+                                          "(channel, timestamp, text, sender, outgoing) VALUES "
+                                          "(NULL, 1700000002, 'from a peer', 'a1b2c3d4e5f6', 0)"),
+                           QStringLiteral("INSERT INTO messages "
+                                          "(channel, timestamp, text, sender, outgoing) VALUES "
+                                          "(NULL, 1700000003, 'from someone else', "
+                                          "'0102030405', 0)")}),
+                   "a version 1 database can be planted"))
+            return 1;
+
+        // Six bytes is all a version 1 row ever held of its peer, so that is
+        // what its conversation is under until the address book supplies the
+        // rest of the key.
+        const model::Conversation prefix =
+            model::Conversation::direct(peerKey.left(model::Conversation::PeerPrefixSize));
+
+        model::History history(directory.path());
+        const model::HistoryMessages carried = history.messages(legacy, channelA, 2);
+        const model::HistoryMessages moved = history.messages(legacy, prefix);
+        const model::HistoryConversations directs = history.directConversations(legacy);
+        if (!check(bool(carried.result) && carried.messages.size() == 1,
+                   "channel messages survive the upgrade") ||
+            !check(carried.messages.at(0).text == QStringLiteral("on a channel") &&
+                       carried.messages.at(0).hasSignal &&
+                       carried.messages.at(0).pathLen == 2,
+                   "an upgraded channel message keeps everything it had") ||
+            !check(bool(moved.result) && moved.messages.size() == 1,
+                   "a direct message lands in the conversation with its peer") ||
+            !check(moved.messages.at(0).text == QStringLiteral("from a peer"),
+                   "the upgraded direct message keeps its text") ||
+            !check(moved.messages.at(0).sender.isEmpty(),
+                   "the peer prefix is no longer carried as a sender name") ||
+            !check(bool(directs.result) && directs.conversations.size() == 2,
+                   "one conversation per peer, not one for all of them"))
+            return 1;
+
+        // And the whole key, when it turns up, is what collects them.
+        if (!check(bool(history.resolvePeer(legacy, peerKey)),
+                   "an upgraded conversation resolves to its peer") ||
+            !check(history.messages(legacy, peer).messages.size() == 1,
+                   "the upgraded message follows the peer it was always from"))
+            return 1;
+
+        // A sender that is not the prefix this version wrote names no peer.
+        // Those messages share a conversation nobody's key can reach rather
+        // than being dropped or filed under somebody real.
+        const model::Conversation unplaceable = model::Conversation::direct(
+            QByteArray(model::Conversation::PeerPrefixSize, '\0'));
+        if (!check(history.messages(legacy, unplaceable).messages.size() == 1,
+                   "a direct message whose peer cannot be recovered is still kept"))
+            return 1;
+
+        // Reopening reads the upgraded shape rather than upgrading again.
+        model::History reopened(directory.path());
+        if (!check(reopened.messages(legacy, peer).messages.size() == 1,
+                   "the upgrade is recorded and not repeated"))
             return 1;
     }
 
@@ -245,12 +386,15 @@ int main(int argc, char* argv[]) {
         const model::HistoryMessages read = history.messages(deviceA, channelA, 3);
         const model::HistoryLatest newest = history.latestMessage(deviceA, channelA, 3);
         const model::HistoryResult removed = history.remove(deviceA, channelA);
+        const model::HistoryConversations listed = history.directConversations(deviceA);
         if (!check(!opened && !opened.error.isEmpty(), "preflight reports why it failed") ||
             !check(!appended && !appended.error.isEmpty(), "append reports why it failed") ||
             !check(!read.result && read.messages.isEmpty(), "a failed read is not an empty one") ||
             !check(!newest.result && !newest.message,
                    "a failed latest lookup is not an absent row") ||
-            !check(!removed && !removed.error.isEmpty(), "removal reports why it failed"))
+            !check(!removed && !removed.error.isEmpty(), "removal reports why it failed") ||
+            !check(!listed.result && listed.conversations.isEmpty(),
+                   "a failed conversation listing is not an empty address book"))
             return 1;
     }
 

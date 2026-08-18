@@ -169,6 +169,7 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     connect(client_, &proto::CompanionClient::contactsChanged, this,
             [this](const QVector<model::Contact>&) {
                 contactsSyncing_ = false;
+                resolveDirectPeers();
                 updateReadyStatus();
             });
     connect(client_, &proto::CompanionClient::messageSyncChanged, this,
@@ -652,8 +653,8 @@ void MainWindow::showChannels(const QVector<model::Channel>& channels) {
     channelModel_->setChannels(channels);
 
     for (const model::Channel& ch : channels) {
-        const model::HistoryLatest latest =
-            history_.latestMessage(activeDeviceId_, ch.keyFingerprint(), ch.index);
+        const model::HistoryLatest latest = history_.latestMessage(
+            activeDeviceId_, model::Conversation::channel(ch.keyFingerprint()), ch.index);
         // One broken database breaks all eight lookups; say so once and stop
         // asking rather than paint the sidebar as eight empty conversations.
         if (!latest.result) {
@@ -705,7 +706,8 @@ void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString&
     // channel. Its key fingerprint was retained before the slot was cleared so
     // only this device's copy of that channel history is removed.
     hideNotice();
-    const model::HistoryResult forgotten = history_.remove(activeDeviceId_, channelKey);
+    const model::HistoryResult forgotten =
+        history_.remove(activeDeviceId_, model::Conversation::channel(channelKey));
     // The channel is gone from the device either way, so this is not a failed
     // removal -- it is messages left behind for a channel that can no longer be
     // opened, which the user is owed the chance to clear up.
@@ -743,8 +745,8 @@ void MainWindow::showChannel(int channelIndex) {
     const int unseenCount = channelModel_->unreadCount(channelIndex);
     QVector<model::Message> conversation;
     if (channelIndex >= 0 && activeDeviceId_.size() == 32) {
-        model::HistoryMessages stored =
-            history_.messages(activeDeviceId_, channelKey, channelIndex);
+        model::HistoryMessages stored = history_.messages(
+            activeDeviceId_, model::Conversation::channel(channelKey), channelIndex);
         // An unreadable conversation must not be shown as an empty one: a
         // database that stopped opening would otherwise look exactly like a
         // channel nobody has said anything on.
@@ -850,6 +852,28 @@ void MainWindow::clearStorageFault() {
     if (!noticeTimer_->isActive()) notice_->hide();
 }
 
+void MainWindow::resolveDirectPeers() {
+    if (activeDeviceId_.size() != 32) return;
+
+    const model::HistoryConversations stored = history_.directConversations(activeDeviceId_);
+    if (!stored.result) {
+        onStorageFailure(QStringLiteral("read the direct conversations"), stored.result);
+        return;
+    }
+
+    for (const model::Conversation& conversation : stored.conversations) {
+        if (conversation.resolved()) continue;
+        const model::Contact* peer = client_->contactFor(conversation);
+        if (!peer) continue;  // still nobody this end can name; it keeps
+        const model::HistoryResult moved =
+            history_.resolvePeer(activeDeviceId_, peer->pubkey);
+        if (!moved) {
+            onStorageFailure(QStringLiteral("place a collected direct message"), moved);
+            return;
+        }
+    }
+}
+
 void MainWindow::preflightStorage() {
     // No identity, no database. The client is told so rather than left to
     // collect messages into nowhere.
@@ -883,29 +907,18 @@ void MainWindow::onStorageFailure(const QString& action, const model::HistoryRes
 // ---------------------------------------------------------------------------
 
 void MainWindow::onMessageReceived(const model::Message& msg) {
-    QByteArray channelKey = channelModel_->keyForIndex(msg.channelIndex);
-    // The live list is authoritative if a message races a UI reset. The
-    // protocol has already popped the message, so losing it merely because its
-    // row is not painted yet would be data loss.
-    if (channelKey.isEmpty()) {
-        for (const model::Channel& channel : client_->channels()) {
-            if (channel.index == msg.channelIndex) {
-                channelKey = channel.keyFingerprint();
-                break;
-            }
-        }
-    }
-
     // Whatever the app could not work out about where this belongs, the node no
     // longer has a copy of it. An unplaceable message is stored in the reserved
     // conversation for its slot instead of being thrown away, and the retry is
-    // whoever reads it back later, not the mesh.
+    // whoever reads it back later, not the mesh. The client resolves the slot
+    // against its own live channel list, so a message racing a UI reset is
+    // placed by what the device says rather than by what is painted.
     const bool knownDevice = activeDeviceId_.size() == 32;
-    const bool knownChannel = channelKey.size() == 32;
+    const bool knownChannel = msg.conversation.isValid();
     const QByteArray deviceId =
         knownDevice ? activeDeviceId_ : model::History::orphanDeviceId();
-    const QByteArray conversation =
-        knownChannel ? channelKey : model::History::orphanChannel(msg.channelIndex);
+    const model::Conversation conversation =
+        knownChannel ? msg.conversation : model::History::orphanChannel(msg.channelIndex);
 
     const model::HistoryResult stored = history_.append(deviceId, conversation, msg);
     if (!stored) {
@@ -934,8 +947,9 @@ void MainWindow::onDirectMessageReceived(const model::Message& msg) {
     // daemon's inbox: not writing it down would destroy it. It goes to the same
     // device database under channel -1, ready for whenever DMs are built out.
     const bool knownDevice = activeDeviceId_.size() == 32;
-    const model::HistoryResult stored = history_.append(
-        knownDevice ? activeDeviceId_ : model::History::orphanDeviceId(), {}, msg);
+    const model::HistoryResult stored =
+        history_.append(knownDevice ? activeDeviceId_ : model::History::orphanDeviceId(),
+                        msg.conversation, msg);
     if (!stored) {
         onStorageFailure(QStringLiteral("save a received direct message"), stored);
         return;
@@ -1012,7 +1026,8 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
     // the daemon's inbox, and a message that never left has no business in it.
     msg.sendState = model::Message::SendState::Sent;
     msg.sendToken = 0;
-    const model::HistoryResult stored = history_.append(pending.deviceId, pending.channelKey, msg);
+    const model::HistoryResult stored = history_.append(
+        pending.deviceId, model::Conversation::channel(pending.channelKey), msg);
     // The message did go out, so it stays on screen; what it says about storage
     // is the same as any other failed write, and collection stops on it.
     if (!stored) onStorageFailure(QStringLiteral("save a sent message"), stored);

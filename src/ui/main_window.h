@@ -100,6 +100,11 @@ private:
     void setStorageFault(const QString& text);
     void clearStorageFault();
 
+    // A direct message can be collected before the address book can name the
+    // peer it came from, in which case it is stored under the six bytes the
+    // wire gave. This is where those messages join the conversation with that
+    // peer, and it is why the address book arriving is worth acting on.
+    void resolveDirectPeers();
     // Opens this device's database and tells the client whether collecting
     // messages is safe. Runs before the handshake completes, which is before
     // the client sends its first SYNC_NEXT_MESSAGE.

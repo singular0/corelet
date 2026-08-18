@@ -192,7 +192,7 @@ Violating any of these produces bugs that only show up against a real device:
   queue is consulted. `PUSH_MSG_WAITING` is what triggers message collection.
 - **`SYNC_NEXT_MESSAGE` pops** from the daemon's inbox. The daemon is not storage; whatever the app
   collects it must persist to the device database or the message is gone. This includes direct messages,
-  which have no view yet but are still stored under channel `-1`. Because the pop is destructive, the
+  which have no view yet but are stored under the conversation with their peer. Because the pop is destructive, the
   drain is gated on storage: `CompanionClient::setStorageAvailable` must be true before the first
   sync, `MainWindow::preflightStorage` sets it from a real open of the device database on
   `deviceInfoChanged`, and any `History` failure turns it back off. Both message signals are
@@ -247,11 +247,19 @@ Violating any of these produces bugs that only show up against a real device:
 ### Persistent state
 
 - `history/<public-key>.sqlite3` under `QStandardPaths::AppDataLocation` — one SQLite database per
-  device, capped at `History::MaxPerChannel` (500) messages per channel. Rows are indexed by a
-  SHA-256 fingerprint of the channel key; the device identity is carried by the filename.
-  Every operation returns a `HistoryResult` and a read returns it beside the rows, because an
-  unreadable database and an empty one otherwise look identical and the difference is somebody's
-  whole message history.
+  device, capped at `History::MaxPerConversation` (500) messages per conversation. The device
+  identity is carried by the filename. Every operation returns a `HistoryResult` and a read returns
+  it beside the rows, because an unreadable database and an empty one otherwise look identical and
+  the difference is somebody's whole message history.
+- A row is filed under a `model::Conversation`: a kind and the identity that kind is addressed by.
+  A channel's is the SHA-256 fingerprint of its key, never its slot; a direct conversation's is the
+  peer's public key. Both go on the wire as `(conv_kind, conv_id)`, so a channel and a peer cannot
+  collide however their bytes fall. `SYNC` hands over only the six-byte prefix the daemon matched a
+  peer on, so a message that arrives before the address book can name its sender is stored under
+  those six bytes — a usable conversation, since `CMD_SEND_TXT_MSG` addresses a reply by prefix
+  too — and `History::resolvePeer` folds it into the whole-key conversation once a contact turns
+  up. `MainWindow::resolveDirectPeers` runs that on every `contactsChanged`, which is also what
+  completes the version 1 upgrade.
 - WAL with `synchronous = NORMAL`. This was weighed against `FULL` and kept: in WAL mode `NORMAL`
   already survives the app being killed, crashing or torn down mid-write, because the WAL sits in
   the OS page cache and the kernel outlives the process, and WAL cannot corrupt the database the way
@@ -271,7 +279,8 @@ Violating any of these produces bugs that only show up against a real device:
   the node has already discarded its copy. Both are near-all-zero and so unreachable by a real
   32-byte public key or a real SHA-256 fingerprint, and the orphan conversation keeps the wire slot
   in its last byte, which is the only clue left if the key turns up later. Nothing reads these back
-  yet (see the DM view, same situation).
+  yet. A direct message needs none of this — its peer prefix is already an identity to file it
+  under, however little of one.
 - `QSettings` (org `singular0`, app `corelet`) holds global `geometry`, `splitter` and the
   `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
   below that are keyed by channel-key fingerprint and the selected channel is stored by the same

@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QHashFunctions>
 #include <QString>
 
 namespace model {
@@ -154,6 +155,64 @@ struct Contact {
     }
 };
 
+// What a conversation is with. Persisted as the number, so never renumber
+// these; append only.
+enum class ConversationKind {
+    Channel = 0,  // everyone on a shared key
+    Direct = 1,   // one peer, addressed by its own key
+};
+
+// Settings and a stored column both hand back plain ints, and an unrecognised
+// one must not index off the end of anything.
+inline ConversationKind conversationKindFromInt(int value) {
+    return value == int(ConversationKind::Direct) ? ConversationKind::Direct
+                                                  : ConversationKind::Channel;
+}
+
+// One conversation, by what kind it is and who it is with. This is the identity
+// history is stored under and the sidebar is built from; a channel's slot number
+// is only its current wire address and says nothing about which conversation it
+// holds.
+struct Conversation {
+    // A channel is identified by the SHA-256 of its key and a peer by its
+    // public key, so one size serves both.
+    static constexpr int IdSize = 32;
+    // What the wire gives for a direct message: the daemon matches the peer on
+    // the first six bytes of its key and passes on no more than that. It is
+    // also all CMD_SEND_TXT_MSG needs to address a reply, so a peer known only
+    // by its prefix is a usable conversation rather than a broken one -- just
+    // one with no name until the address book catches up with it.
+    static constexpr int PeerPrefixSize = 6;
+
+    ConversationKind kind = ConversationKind::Channel;
+    QByteArray id;
+
+    static Conversation channel(const QByteArray& keyFingerprint) {
+        return {ConversationKind::Channel, keyFingerprint};
+    }
+    static Conversation direct(const QByteArray& peerKey) {
+        return {ConversationKind::Direct, peerKey};
+    }
+
+    bool isChannel() const { return kind == ConversationKind::Channel; }
+    bool isDirect() const { return kind == ConversationKind::Direct; }
+    // Whether the whole identity is in hand, as against a peer still carrying
+    // only the prefix the wire gave for it.
+    bool resolved() const { return id.size() == IdSize; }
+    bool isValid() const {
+        return resolved() || (isDirect() && id.size() == PeerPrefixSize);
+    }
+    // How a peer is addressed on the wire, whether or not the whole key is
+    // known here.
+    QByteArray peerPrefix() const { return id.left(PeerPrefixSize); }
+
+    bool operator==(const Conversation& other) const = default;
+};
+
+inline size_t qHash(const Conversation& conversation, size_t seed = 0) {
+    return qHashMulti(seed, int(conversation.kind), conversation.id);
+}
+
 struct Message {
     // How far one of our own sends has got. Meaningless for incoming messages,
     // and for anything read back from history: the app writes a message down
@@ -163,9 +222,18 @@ struct Message {
         Pending,  // shown optimistically, still waiting for that answer
     };
 
-    int channelIndex = 0;
+    // Where this belongs. Invalid when the app could not work that out -- a slot
+    // holding no configured channel -- which is a message to store out of the
+    // way rather than one to drop, since collecting it took it off the node.
+    Conversation conversation;
+    // The wire slot a channel message arrived on, or -1 for a direct message.
+    // Only an address, and only the current one: what the message belongs to is
+    // `conversation`.
+    int channelIndex = -1;
     // Channel messages carry no per-sender key, only a name the sender put in
     // the text, so this is unauthenticated and must never be treated as identity.
+    // A direct message's sender is the peer, whose identity is the conversation
+    // itself; this holds the name that peer went by when the message arrived.
     QString sender;
     QString text;
     QDateTime timestamp;

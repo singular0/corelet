@@ -139,6 +139,7 @@ void CompanionClient::resetConnection() {
     storageAvailable_ = false;
     channelsOutstanding_ = 0;
     incomingContacts_.clear();
+    contactsOutstanding_ = false;
     contactFetches_.clear();
     replyTimer_->stop();
     batteryTimer_->stop();
@@ -549,12 +550,20 @@ model::Contact CompanionClient::parseContact(Reader& r) {
 }
 
 void CompanionClient::requestContacts() {
+    // One stream at a time. A backlog of direct messages from a peer this end
+    // cannot name would otherwise queue a full re-enumeration per message, and
+    // the first answer names the peer for all of them anyway.
+    if (contactsOutstanding_) return;
+    contactsOutstanding_ = true;
+
     // No `since` filter, which the daemon would accept: the app keeps no
     // contact cache between sessions, so an incremental answer would leave it
     // holding a list it has no way to complete.
     Writer w(CmdGetContacts);
-    enqueue(w.bytes(), [this](quint8 code, Reader& r) {
-        switch (code) {
+    enqueue(
+        w.bytes(),
+        [this](quint8 code, Reader& r) {
+            switch (code) {
             case RespContactsStart:
                 incomingContacts_.clear();
                 return false;  // the count only; the contacts follow
@@ -568,12 +577,14 @@ void CompanionClient::requestContacts() {
                 // say: either way what has arrived is now the address book,
                 // and an empty one is worth announcing so a stale list from
                 // the previous session goes away.
+                contactsOutstanding_ = false;
                 contacts_ = incomingContacts_;
                 incomingContacts_.clear();
                 Q_EMIT contactsChanged(contacts_);
                 return true;
-        }
-    });
+            }
+        },
+        [this] { contactsOutstanding_ = false; });
 }
 
 void CompanionClient::requestContact(const QByteArray& pubkey) {
@@ -595,6 +606,30 @@ void CompanionClient::requestContact(const QByteArray& pubkey) {
             return true;
         },
         [this, pubkey] { contactFetches_.remove(pubkey); });
+}
+
+model::Conversation CompanionClient::channelConversation(int slot) const {
+    for (const model::Channel& channel : channels_)
+        if (channel.index == slot) return model::Conversation::channel(channel.keyFingerprint());
+    return {};
+}
+
+model::Conversation CompanionClient::directConversation(const QByteArray& prefix) const {
+    const model::Conversation byPrefix = model::Conversation::direct(prefix);
+    if (const model::Contact* peer = contactFor(byPrefix))
+        return model::Conversation::direct(peer->pubkey);
+    return byPrefix;
+}
+
+const model::Contact* CompanionClient::contactFor(
+    const model::Conversation& conversation) const {
+    if (!conversation.isDirect() || conversation.id.isEmpty()) return nullptr;
+    // A conversation carries either the peer's whole key or the six bytes the
+    // wire gave for it, and six bytes is exactly what the daemon matched the
+    // peer on, so one prefix comparison answers both.
+    for (const model::Contact& contact : contacts_)
+        if (contact.pubkey.startsWith(conversation.id)) return &contact;
+    return nullptr;
 }
 
 void CompanionClient::upsertContact(const model::Contact& contact) {
@@ -642,14 +677,27 @@ void CompanionClient::requestSync() {
             if (code == RespChannelMsgRecvV3) {
                 const int channelIndex = r.u8();
                 model::Message msg = parseMessageTail(r, snrQ4, channelIndex);
+                // A slot holding no configured channel leaves the conversation
+                // invalid, which is what tells the owner to store the message
+                // out of the way rather than throw it after the node already
+                // discarded its copy.
+                msg.conversation = channelConversation(channelIndex);
                 if (r.ok()) Q_EMIT messageReceived(msg);
             } else {
                 const QByteArray prefix = r.take(6);
                 model::Message msg = parseMessageTail(r, snrQ4, -1);
-                // No contact sync in v1, so the peer is identified by the key
-                // prefix the daemon matched on.
-                msg.sender = QString::fromLatin1(prefix.toHex());
-                if (r.ok()) Q_EMIT directMessageReceived(msg);
+                msg.conversation = directConversation(prefix);
+                if (r.ok()) {
+                    if (const model::Contact* peer = contactFor(msg.conversation))
+                        msg.sender = peer->displayName();
+                    else
+                        // The daemon matched this key against its own contact
+                        // store, so a list that cannot name it is a stale copy
+                        // rather than a peer nobody has heard of. The message
+                        // still lands under its prefix either way.
+                        requestContacts();
+                    Q_EMIT directMessageReceived(msg);
+                }
             }
 
             // Drain: the daemon pushes MSG_WAITING once per message, but a

@@ -71,6 +71,12 @@ public:
     const DeviceInfo& device() const { return device_; }
     const QVector<model::Channel>& channels() const { return channels_; }
     const QVector<model::Contact>& contacts() const { return contacts_; }
+    // The peer a direct conversation is with, or null while the address book
+    // has nothing that matches -- which is what a conversation known only by
+    // the six-byte prefix the wire gave looks like until the list catches up.
+    // Valid only until contacts() next changes, so read what is wanted out of
+    // it rather than keeping it.
+    const model::Contact* contactFor(const model::Conversation& conversation) const;
 
     // `token` is handed straight back in sendResult(). Nothing in the protocol
     // identifies which send an answer belongs to, so the caller's own tag is
@@ -118,8 +124,9 @@ Q_SIGNALS:
     // it. A backlog can take long enough to be worth exposing as link activity.
     void messageSyncChanged(bool syncing);
     void messageReceived(const model::Message& msg);
-    // A direct message the daemon handed us. v1 has no DM view, but SYNC pops
-    // from the daemon's inbox, so these must be captured rather than dropped.
+    // A direct message the daemon handed us, already placed in the conversation
+    // with its peer -- by the peer's whole key when the address book has it,
+    // and by the six-byte prefix the wire carries when it does not.
     void directMessageReceived(const model::Message& msg);
     // Exactly one of these arrives per sendChannelMessage(), including when the
     // link dies with the command still queued.
@@ -163,12 +170,26 @@ private:
     void requestChannel(int index);
     // The contact stream: CONTACTS_START, a CONTACT per node, END_OF_CONTACTS.
     // Multi-frame, so its handler returns false until the terminator arrives.
+    // Asked for once during the handshake, and again whenever a direct message
+    // arrives from a key this end cannot name -- the daemon matched that peer,
+    // so a list that does not have it is a stale copy. At most one stream is
+    // ever in flight: a backlog of messages from one unknown peer must not
+    // queue a re-enumeration each.
     void requestContacts();
     // Re-reads one contact after a push said something about it changed. A push
     // carries the key and nothing else, so what changed has to be asked for.
     void requestContact(const QByteArray& pubkey);
     void upsertContact(const model::Contact& contact);
     static model::Contact parseContact(Reader& r);
+    // The conversation a channel slot names, or an invalid one when nothing
+    // configured is in that slot -- a message for which is a message the app
+    // cannot place, not one to drop.
+    model::Conversation channelConversation(int slot) const;
+    // The conversation a direct message's six-byte peer prefix names: the
+    // peer's whole key once the address book has it, and the prefix itself
+    // until then, which is still enough to file the message under and to
+    // address a reply with.
+    model::Conversation directConversation(const QByteArray& prefix) const;
     // Re-reads one slot after writing it and reports the write's outcome.
     // `cleared` says which write it was: the slot is expected to be occupied
     // afterwards, or empty, and the answer goes to the matching signal.
@@ -209,6 +230,8 @@ private:
     // contacts_ once the device says that is all of them: a half-read list must
     // never be shown as the address book.
     QVector<model::Contact> incomingContacts_;
+    // Whether a contact stream is already queued or running. See requestContacts().
+    bool contactsOutstanding_ = false;
     // Keys with a fetch already queued. A busy mesh repeats one node's advert by
     // several routes, and an advert that also moved the path pushes twice, so
     // without this the queue fills with re-reads of the same contact.
