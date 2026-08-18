@@ -272,25 +272,8 @@ QSqlDatabase History::databaseFor(const QByteArray& deviceId, QString* error) co
         // where that is the expensive syscall. Not worth it for the window it
         // closes.
         step(QStringLiteral("PRAGMA synchronous = NORMAL"));
-        // Nothing reads this back yet. It is here because it is a *write*:
-        // opening a database says nothing about being able to add to it, and a
-        // read-only file or a full card has to fail here rather than while
-        // storing a message the node has already discarded.
-        step(QStringLiteral("PRAGMA user_version = 1"));
-        step(QStringLiteral("CREATE TABLE IF NOT EXISTS messages ("
-                            "id INTEGER PRIMARY KEY, "
-                            // NULL is the device's direct-message conversation;
-                            // channel conversations use a 32-byte fingerprint.
-                            "channel BLOB, "
-                            "timestamp INTEGER NOT NULL, "
-                            "text TEXT NOT NULL, "
-                            "sender TEXT NOT NULL DEFAULT '', "
-                            "outgoing INTEGER NOT NULL DEFAULT 0, "
-                            "snr REAL, "
-                            "path_len INTEGER)"));
-        step(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_by_channel "
-                            "ON messages(channel, id)"));
     }
+    if (initError.isEmpty()) initError = migrate(db);
     if (!initError.isEmpty()) {
         db.close();
         db = {};
@@ -300,6 +283,74 @@ QSqlDatabase History::databaseFor(const QByteArray& deviceId, QString* error) co
 
     connectionNames_.insert(deviceId, connectionName);
     return db;
+}
+
+QString History::migrate(QSqlDatabase& db) {
+    QSqlQuery read(db);
+    if (!read.exec(QStringLiteral("PRAGMA user_version")) || !read.next())
+        return sqlError(read.lastError());
+    const int found = read.value(0).toInt();
+    read.finish();
+
+    // A database written by a later build is somebody's message history in a
+    // shape this one cannot read. Refusing it leaves it intact for the build
+    // that can; opening it anyway would append rows in the old shape and trim
+    // conversations by rules that no longer apply.
+    if (found > SchemaVersion)
+        return QStringLiteral("the message history is version %1 and this build of Corelet "
+                              "reads version %2; use a newer Corelet")
+            .arg(found)
+            .arg(SchemaVersion);
+
+    QString error;
+    const auto step = [&](const QString& statement) {
+        if (!error.isEmpty()) return;
+        QSqlQuery query(db);
+        if (!query.exec(statement)) error = sqlError(query.lastError());
+    };
+
+    if (found < SchemaVersion) {
+        // Each version's steps run in one transaction with the version bump
+        // that records them, so a database is either wholly at the version it
+        // claims or wholly back where it started. Version 1 is the first shape
+        // there was, so there is nothing to step up from yet; what an older
+        // database needs goes here, in ascending order, as the shape changes.
+        if (!db.transaction()) return sqlError(db.lastError());
+        step(QStringLiteral("PRAGMA user_version = %1").arg(SchemaVersion));
+        if (!error.isEmpty()) {
+            db.rollback();
+            return error;
+        }
+        if (!db.commit()) {
+            const QString reason = sqlError(db.lastError());
+            db.rollback();
+            return reason;
+        }
+    }
+
+    // The current shape, applied on every open rather than only to a brand-new
+    // file: it creates the tables of a database that has none, and is a no-op
+    // for one that has them. That is also what repairs a database left holding
+    // a version but no table by an open that failed between the two.
+    step(QStringLiteral("CREATE TABLE IF NOT EXISTS messages ("
+                        "id INTEGER PRIMARY KEY, "
+                        // NULL is the device's direct-message conversation;
+                        // channel conversations use a 32-byte fingerprint.
+                        "channel BLOB, "
+                        "timestamp INTEGER NOT NULL, "
+                        "text TEXT NOT NULL, "
+                        "sender TEXT NOT NULL DEFAULT '', "
+                        "outgoing INTEGER NOT NULL DEFAULT 0, "
+                        "snr REAL, "
+                        "path_len INTEGER)"));
+    step(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_by_channel "
+                        "ON messages(channel, id)"));
+    // Written back even when it is already this, because it is the one *write*
+    // an open performs: opening a database says nothing about being able to add
+    // to it, and a read-only file or a full card has to fail here rather than
+    // while storing a message the node has already discarded.
+    step(QStringLiteral("PRAGMA user_version = %1").arg(SchemaVersion));
+    return error;
 }
 
 }  // namespace model

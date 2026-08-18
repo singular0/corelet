@@ -257,9 +257,15 @@ Violating any of these produces bugs that only show up against a real device:
   the OS page cache and the kernel outlives the process, and WAL cannot corrupt the database the way
   a rollback journal at `NORMAL` can. Only a battery pull or a kernel panic within seconds of a
   commit loses anything, and `FULL` buys that back at one SD-card fsync per received message, on the
-  write path of a backlog drain. Don't switch it without a measurement on the CM4. `PRAGMA
-  user_version` is set on open purely as a *write*, so a read-only file or a full card fails the
-  preflight rather than the first message.
+  write path of a backlog drain. Don't switch it without a measurement on the CM4.
+- `PRAGMA user_version` carries `History::SchemaVersion`. An older database is stepped up on open
+  by `History::migrate`, each version's statements in one transaction with the bump that records
+  them; a *newer* one is refused by name rather than guessed at, because appending to it in a shape
+  it does not use is how a future build's history gets corrupted by an old binary. The current DDL
+  is `CREATE ... IF NOT EXISTS` and runs on every open rather than only on a new file, so it also
+  repairs a database left holding a version but no table. The version is then written back
+  unconditionally, because it is the one *write* an open performs: a read-only file or a full card
+  has to fail the preflight rather than the first message.
 - A message the app cannot place — no device identity yet, or a channel whose key is not in hand —
   goes to `History::orphanDeviceId()` / `History::orphanChannel(slot)` rather than being dropped:
   the node has already discarded its copy. Both are near-all-zero and so unreachable by a real

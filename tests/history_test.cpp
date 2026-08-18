@@ -1,6 +1,10 @@
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 
 #include "model/history.h"
@@ -10,6 +14,35 @@ namespace {
 bool check(bool condition, const char* expression) {
     if (!condition) qCritical("check failed: %s", expression);
     return condition;
+}
+
+QString databasePath(const QTemporaryDir& directory, const QByteArray& deviceId) {
+    return QDir(directory.path())
+        .filePath(QString::fromLatin1(deviceId.toHex()) + QStringLiteral(".sqlite3"));
+}
+
+// Runs statements straight against a device database, which is how a test
+// builds a database History did not write: one left by an older build, or one
+// stamped with a version only a later build understands.
+bool runSql(const QString& path, const QStringList& statements) {
+    bool ok = true;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                    QStringLiteral("history-test-raw"));
+        db.setDatabaseName(path);
+        if (!db.open()) return false;
+        QSqlQuery query(db);
+        for (const QString& statement : statements) {
+            if (query.exec(statement)) continue;
+            qCritical("sql failed: %s: %s", qPrintable(statement),
+                      qPrintable(query.lastError().text()));
+            ok = false;
+            break;
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("history-test-raw"));
+    return ok;
 }
 
 model::Message message(int channelIndex, int sequence) {
@@ -55,10 +88,8 @@ int main(int argc, char* argv[]) {
         history.append(deviceB, channelA, message(7, 3));
         history.append(deviceA, {}, message(-1, 4));
 
-        const QString pathA = directory.filePath(
-            QString::fromLatin1(deviceA.toHex()) + QStringLiteral(".sqlite3"));
-        const QString pathB = directory.filePath(
-            QString::fromLatin1(deviceB.toHex()) + QStringLiteral(".sqlite3"));
+        const QString pathA = databasePath(directory, deviceA);
+        const QString pathB = databasePath(directory, deviceB);
         if (!check(QFileInfo::exists(pathA), "device A database exists") ||
             !check(QFileInfo::exists(pathB), "device B database exists") ||
             !check(pathA != pathB, "devices use distinct databases"))
@@ -152,6 +183,49 @@ int main(int argc, char* argv[]) {
                    "channel removal leaves other devices intact") ||
             !check(history.messages(deviceA, {}, -1).messages.size() == 1,
                    "channel removal leaves direct messages intact"))
+            return 1;
+    }
+
+    // Every database says which shape it is in, and one written by a later
+    // build is refused rather than appended to in a shape it does not use.
+    {
+        const QString pathA = databasePath(directory, deviceA);
+        model::History history(directory.path());
+        const model::HistoryResult stamped = history.preflight(deviceA);
+        if (!check(bool(stamped), "an existing database still opens")) return 1;
+
+        const QByteArray fromTheFuture(32, '\x55');
+        if (!check(runSql(databasePath(directory, fromTheFuture),
+                          {QStringLiteral("PRAGMA user_version = %1")
+                               .arg(model::History::SchemaVersion + 1)}),
+                   "a future-version database can be planted"))
+            return 1;
+
+        model::History later(directory.path());
+        const model::HistoryResult refused = later.preflight(fromTheFuture);
+        const model::HistoryResult appended =
+            later.append(fromTheFuture, channelA, message(3, 1));
+        if (!check(!refused && refused.error.contains(QStringLiteral("newer Corelet")),
+                   "a database from a later build is refused by name") ||
+            !check(!appended, "nothing is written to a database that was refused"))
+            return 1;
+
+        // A database whose version was recorded but whose table never was --
+        // an open that failed between the two -- repairs itself rather than
+        // failing every operation from then on.
+        const QByteArray halfBuilt(32, '\x66');
+        if (!check(runSql(databasePath(directory, halfBuilt),
+                          {QStringLiteral("PRAGMA user_version = %1")
+                               .arg(model::History::SchemaVersion)}),
+                   "a version-only database can be planted"))
+            return 1;
+
+        model::History repaired(directory.path());
+        if (!check(bool(repaired.append(halfBuilt, channelA, message(3, 1))),
+                   "a database holding a version but no table is repaired on open"))
+            return 1;
+
+        if (!check(QFileInfo::exists(pathA), "the planted databases left device A alone"))
             return 1;
     }
 

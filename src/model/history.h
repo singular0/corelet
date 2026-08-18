@@ -50,6 +50,12 @@ public:
     // limited RAM and nobody scrolls back further than this in a mesh chat.
     static constexpr int MaxPerChannel = 500;
 
+    // What this binary writes and knows how to read. Every database carries its
+    // own in `PRAGMA user_version`: an older one is stepped up to this on open,
+    // and a newer one is refused rather than guessed at, because the only thing
+    // a database from a future build can be is somebody's message history.
+    static constexpr int SchemaVersion = 1;
+
     explicit History(QString directory);
     ~History();
 
@@ -98,6 +104,11 @@ private:
     // Sets `*error` on every path that returns an unusable database, so no
     // caller has to invent a reason for a failure it did not see.
     QSqlDatabase databaseFor(const QByteArray& deviceId, QString* error) const;
+    // Brings a just-opened database up to SchemaVersion. Returns an empty
+    // string on success and the reason otherwise; the caller closes and
+    // discards the connection on a failure, since a half-migrated database is
+    // not one to keep writing messages into.
+    static QString migrate(QSqlDatabase& db);
 
     QString directory_;
     // Connections are lazy: devices untouched in this process cost no file
