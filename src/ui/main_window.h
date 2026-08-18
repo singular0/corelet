@@ -83,6 +83,7 @@ private:
     // editing needs nothing, the counter follows the field itself.
     void updateMessageBudget();
     void updateInputState();
+    void updateReadyStatus();
     // Adding and removing a channel are both writes to the device, so they need
     // a live link -- and a free slot to write into, or a removable channel
     // selected.
@@ -142,6 +143,8 @@ private:
     // One preflight per handshake. Reset whenever the link leaves Ready, which
     // is the only thing that gives storage another chance.
     bool storagePreflighted_ = false;
+    bool contactsSyncing_ = false;
+    bool messagesSyncing_ = false;
 
     // Current daemon slot number of the open conversation, or -1 for none. It
     // is only a wire address; persistent selection follows the channel key.

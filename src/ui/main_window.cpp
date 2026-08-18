@@ -166,6 +166,16 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     connect(client_, &proto::CompanionClient::deviceInfoChanged, this, &MainWindow::onDeviceInfo);
     connect(client_, &proto::CompanionClient::channelsChanged, this,
             &MainWindow::onChannelsChanged);
+    connect(client_, &proto::CompanionClient::contactsChanged, this,
+            [this](const QVector<model::Contact>&) {
+                contactsSyncing_ = false;
+                updateReadyStatus();
+            });
+    connect(client_, &proto::CompanionClient::messageSyncChanged, this,
+            [this](bool syncing) {
+                messagesSyncing_ = syncing;
+                updateReadyStatus();
+            });
     connect(client_, &proto::CompanionClient::messageReceived, this,
             &MainWindow::onMessageReceived);
     connect(client_, &proto::CompanionClient::directMessageReceived, this,
@@ -1076,6 +1086,18 @@ void MainWindow::updateChannelActions() {
 // Connection
 // ---------------------------------------------------------------------------
 
+void MainWindow::updateReadyStatus() {
+    if (client_->state() != proto::CompanionClient::State::Ready) return;
+
+    const QString label = contactsSyncing_
+                              ? QStringLiteral("syncing contacts")
+                          : messagesSyncing_ ? QStringLiteral("syncing messages")
+                                             : QStringLiteral("connected");
+    const QColor color = contactsSyncing_ || messagesSyncing_ ? theme::Warning
+                                                               : theme::Accent;
+    nodePane_->setConnection(label, color, client_->isRunning(), true);
+}
+
 void MainWindow::onStateChanged(proto::CompanionClient::State state, const QString& detail) {
     using State = proto::CompanionClient::State;
 
@@ -1084,7 +1106,11 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
     // work, so a retry that guesses wrong costs another message to find out --
     // asking for one is what destroys the node's copy. Rebuilding the link is
     // the deliberate act that gets storage another chance.
-    if (state != State::Ready) storagePreflighted_ = false;
+    if (state != State::Ready) {
+        storagePreflighted_ = false;
+        contactsSyncing_ = false;
+        messagesSyncing_ = false;
+    }
 
     QString label;
     QColor color = theme::TextMuted;
@@ -1104,8 +1130,12 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
             color = theme::Warning;
             break;
         case State::Ready:
-            label = QStringLiteral("connected");
-            color = theme::Accent;
+            // The client deliberately makes channels usable before the full
+            // contact stream is published. Keep the link active, but say what
+            // the remaining startup work is until contactsChanged arrives.
+            contactsSyncing_ = true;
+            label = QStringLiteral("syncing contacts");
+            color = theme::Warning;
             break;
     }
     nodePane_->setConnection(label, color, client_->isRunning(), state == State::Ready);

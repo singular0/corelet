@@ -132,6 +132,7 @@ void CompanionClient::resetConnection() {
     dropped.swap(queue_);
     inFlight_ = false;
     syncPending_ = false;
+    setMessageSyncing(false);
     // Each session preflights its own storage: the endpoint may now be serving
     // a different radio, and that device's database is a different file which
     // may or may not open.
@@ -615,6 +616,7 @@ void CompanionClient::upsertContact(const model::Contact& contact) {
 void CompanionClient::setStorageAvailable(bool available) {
     if (storageAvailable_ == available) return;
     storageAvailable_ = available;
+    if (!available) setMessageSyncing(false);
     // Whatever the drain stopped on is still sitting in the daemon's inbox, so
     // there is a backlog to pick up the moment there is somewhere to put it.
     if (available && state_ == State::Ready) requestSync();
@@ -627,6 +629,7 @@ void CompanionClient::requestSync() {
     if (!storageAvailable_) return;
     if (syncPending_) return;
     syncPending_ = true;
+    setMessageSyncing(true);
 
     Writer w(CmdSyncNextMessage);
     enqueue(w.bytes(), [this](quint8 code, Reader& r) {
@@ -655,10 +658,18 @@ void CompanionClient::requestSync() {
             // either written down or storage has been turned off by the time
             // this runs -- which is what makes it safe to ask for the next one.
             requestSync();
+        } else {
+            // RESP_NO_MORE_MESSAGES (or an error) ends the drain.
+            setMessageSyncing(false);
         }
-        // RESP_NO_MORE_MESSAGES (or an error) ends the drain.
         return true;
     });
+}
+
+void CompanionClient::setMessageSyncing(bool syncing) {
+    if (messageSyncing_ == syncing) return;
+    messageSyncing_ = syncing;
+    Q_EMIT messageSyncChanged(syncing);
 }
 
 model::Message CompanionClient::parseMessageTail(Reader& r, qint8 snrQ4, int channelIndex) {

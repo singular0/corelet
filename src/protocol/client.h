@@ -114,6 +114,9 @@ Q_SIGNALS:
     // a view can repaint the one row instead of rebuilding a list somebody is
     // reading down.
     void contactChanged(const model::Contact& contact);
+    // Covers a complete inbox drain, not each individual SYNC_NEXT_MESSAGE in
+    // it. A backlog can take long enough to be worth exposing as link activity.
+    void messageSyncChanged(bool syncing);
     void messageReceived(const model::Message& msg);
     // A direct message the daemon handed us. v1 has no DM view, but SYNC pops
     // from the daemon's inbox, so these must be captured rather than dropped.
@@ -171,6 +174,7 @@ private:
     // afterwards, or empty, and the answer goes to the matching signal.
     void readBackChannel(int index, bool cleared);
     void requestSync();
+    void setMessageSyncing(bool syncing);
 
     void setState(State s, const QString& detail = {});
     void resetConnection();
@@ -191,6 +195,7 @@ private:
     // Guards against stacking a sync per push: one drain loop is enough, and
     // the daemon pushes MSG_WAITING once per stored message.
     bool syncPending_ = false;
+    bool messageSyncing_ = false;
     // Off until the owner says otherwise, and off again on every reconnect, so
     // a session that never preflights its storage never pops a message.
     bool storageAvailable_ = false;
