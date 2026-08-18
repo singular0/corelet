@@ -6,10 +6,9 @@
 
 namespace model {
 
-// The address book. Rows are ordered by name rather than by when each node was
-// last heard: adverts land all day, and a list that reorders itself under
-// somebody reading down it is worse than one where the freshest entry is not on
-// top -- when each was heard is on the row anyway.
+// The address-book source model. Its base order is by name; a view may put a
+// sort/filter proxy in front of it when the reader explicitly asks for a
+// different order or only some node types.
 class ContactModel : public QAbstractListModel {
     Q_OBJECT
 

@@ -105,11 +105,13 @@ void ContactDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
                 nameFm.elidedText(name, Qt::ElideRight, r.width()));
     y += nameFm.height() + LineGap;
 
-    // Elided in the middle rather than at the end: a key is compared against a
-    // written-down copy from both ends inwards, and the leading bytes especially
-    // -- they are how the daemon's logs and the other apps abbreviate a node.
-    const QString key = QString::fromLatin1(
+    // The full key is too long to scan in a list. Keep enough from both ends to
+    // compare it with another client while making the abbreviation explicit.
+    const QString keyHex = QString::fromLatin1(
         index.data(model::ContactModel::PublicKeyRole).toByteArray().toHex());
+    const QString key = keyHex.size() > 16
+                            ? QStringLiteral("<%1...%2>").arg(keyHex.left(8), keyHex.right(8))
+                            : QStringLiteral("<%1>").arg(keyHex);
     p->setFont(keyFont_);
     p->setPen(theme::TextMuted);
     p->drawText(QRect(r.left(), y, r.width(), keyFm.height()),

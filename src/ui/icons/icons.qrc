@@ -22,5 +22,6 @@
         <file>server.svg</file>
         <file>battery-medium.svg</file>
         <file>info.svg</file>
+        <file>circle-help.svg</file>
     </qresource>
 </RCC>

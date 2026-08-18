@@ -110,6 +110,13 @@ void apply(QApplication& app) {
             background: transparent; border: none; border-radius: 3px; padding: 2px;
         }
         QToolButton#iconButton:hover { background: %4; }
+        /* Contact-type filters are icon-only, so the border and accent state
+           have to carry the on/off distinction that checkbox text used to. */
+        QToolButton#filterButton {
+            background: transparent; border: 1px solid %5; border-radius: 3px; padding: 3px;
+        }
+        QToolButton#filterButton:hover { background: %4; }
+        QToolButton#filterButton:checked { background: %4; border-color: %6; }
         QRadioButton { spacing: 6px; }
         /* A popup is a QWidget too, so without this it would take the flat
            window background above and stand off the page by nothing at all.
