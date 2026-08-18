@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDialog>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -267,6 +268,19 @@ void MainWindow::showAddChannelMenu() {
 
     QAction* chosen =
         menu.exec(addChannelButton_->mapToGlobal(QPoint(0, addChannelButton_->height())));
+
+    // A popup holds the mouse grab for as long as it is up, so the button that
+    // opened it never sees the pointer leave: dismissed with a click somewhere
+    // else, the '+' would stay lit as though the cursor were still on it. Only
+    // when the pointer really has moved off -- clearing the flag under it would
+    // unlight a button the cursor is still on and leave it that way, since no
+    // second enter is coming.
+    if (!addChannelButton_->rect().contains(
+            addChannelButton_->mapFromGlobal(QCursor::pos()))) {
+        addChannelButton_->setAttribute(Qt::WA_UnderMouse, false);
+        QEvent leave(QEvent::Leave);
+        QCoreApplication::sendEvent(addChannelButton_, &leave);
+    }
 
     // The public channel is the one kind with nothing to fill in.
     if (chosen == joinPublic) {
