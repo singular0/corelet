@@ -254,3 +254,7 @@ struct Message {
 };
 
 }  // namespace model
+
+// The sidebar carries a conversation through QAbstractItemModel::data(), which
+// speaks only QVariant.
+Q_DECLARE_METATYPE(model::Conversation)

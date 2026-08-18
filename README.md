@@ -4,8 +4,8 @@ A lightweight, cross-platform desktop companion app for [MeshCore](https://meshc
 chat window for your mesh node.
 
 It reaches your node over Bluetooth LE straight to the device, or over a Unix socket or TCP to a
-companion daemon. Either way it lists the node's channels, shows their history and sends and
-receives messages on them.
+companion daemon. Either way it lists the node's channels and the people you talk to, shows their
+history and sends and receives messages.
 
 Corelet is a client and nothing more. All radio work, encryption and channel state live in the
 device firmware or the daemon.
@@ -18,13 +18,16 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 
 **Messaging**
 
-- [x] Channel sidebar with the newest message, unread counts, and an icon for each channel kind.
+- [x] A sidebar of channels and direct conversations, each with its newest message, unread count
+      and an icon for what it is.
 - [x] Send and receive channel messages.
-- [x] Day markers and an unread marker, so a busy channel opens on what is new.
+- [x] Send and receive direct messages. Start one from the **+** menu and pick who from your
+      contacts.
+- [x] Day markers and an unread marker, so a busy conversation opens on what is new.
 - [x] History kept on disk per node and surviving restarts. Collecting a message removes it from
       the node's inbox, so **Corelet's database is the only copy of your messages.**
-- [ ] Direct messages. They are received and saved, but there is no view for them and no way to
-      send one.
+- [ ] Delivery confirmation for a direct message. The tick means your node accepted it, not that it
+      arrived.
 
 **Channels**
 
@@ -38,7 +41,7 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 - [x] A node pane with its name, what you are connected to, and battery level.
 - [x] A node info panel with the public key, position and radio settings.
 - [x] A contacts window: everyone the node has heard from, with their public key, when their last
-      advert arrived and how far it travelled. Nothing can be done to a contact yet.
+      advert arrived and how far it travelled — and the place you pick somebody to message.
 - [ ] Telemetry.
 - [ ] Changing device settings.
 

@@ -21,13 +21,13 @@
 #include <QVBoxLayout>
 #include <memory>
 
-#include "model/channel_model.h"
 #include "model/chat_model.h"
+#include "model/conversation_model.h"
 #include "protocol/text_limits.h"
 #include "ui/add_channel_dialogs.h"
 #include "ui/byte_limit.h"
-#include "ui/channel_delegate.h"
 #include "ui/connect_dialog.h"
+#include "ui/conversation_delegate.h"
 #include "ui/contacts_dialog.h"
 #include "ui/dialog_settings.h"
 #include "ui/elided_label.h"
@@ -172,6 +172,17 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
                 resolveDirectPeers();
                 updateReadyStatus();
             });
+    // An advert can be the first thing to put a name to a peer somebody is
+    // already talking to, which turns a row of hex into a person.
+    connect(client_, &proto::CompanionClient::contactChanged, this,
+            [this](const model::Contact& contact) {
+                const model::Conversation peer =
+                    model::Conversation::direct(contact.pubkey);
+                if (conversationModel_->rowFor(peer) < 0) return;
+                conversationModel_->upsertDirect({peer, contact.displayName()});
+                rememberDirectConversation(peer);
+                if (peer == current_) updateHeader();
+            });
     connect(client_, &proto::CompanionClient::messageSyncChanged, this,
             [this](bool syncing) {
                 messagesSyncing_ = syncing;
@@ -206,19 +217,20 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     // persisted state until SELF_INFO supplies the new public key.
     activeDeviceId_.clear();
     pendingChannelRemovals_.clear();
-    currentChannel_ = -1;
+    current_ = {};
     // The new session preflights its own database, and that is what decides
     // whether there is still a fault to report.
     clearStorageFault();
     hideNotice();
-    channelModel_->clearTransientState();
-    channelModel_->setChannels({});
+    conversationModel_->clearTransientState();
+    conversationModel_->setChannels({});
+    conversationModel_->setDirectConversations({});
     chatModel_->setMessages({});
     setWindowTitle(windowTitleFor({}));
     nodePane_->setDevice({});
     updateHeader();
     updateInputState();
-    updateChannelActions();
+    updateConversationActions();
 
     target_ = target;
     nodePane_->setTarget(target);
@@ -238,21 +250,21 @@ void MainWindow::showContacts() {
     ContactsDialog(client_, this).exec();
 }
 
-void MainWindow::showAddChannelMenu() {
-    // The device holds the channel list and the keys, so adding one is a write
-    // to it — and every item below needs those keys, to recognise a channel that
-    // is already joined. Neither works from the offline cache.
+void MainWindow::showAddMenu() {
+    // Everything in this menu needs the node: the channel items write to it and
+    // need its keys to recognise a channel already joined, and a direct
+    // conversation is with somebody out of its address book. None of it works
+    // from the offline cache.
     if (client_->state() != proto::CompanionClient::State::Ready) return;
 
     // Taken by value: each dialog runs an event loop, and a reconnect
     // re-enumerating the channels underneath it would leave the reference it
     // was built from dangling.
     const QVector<model::Channel> existing = client_->channels();
-    if (!AddChannelDialog::hasFreeSlot(existing)) return;
 
-    // The kind of channel is chosen before anything is typed, so it is a menu
-    // rather than a control inside a dialog. The icons are the ones the sidebar
-    // paints for each kind, which is what the new row will look like.
+    // The kind of conversation is chosen before anything is typed, so it is a
+    // menu rather than a control inside a dialog. The icons are the ones the
+    // sidebar paints for each kind, which is what the new row will look like.
     const int iconSize = theme::scaled(font(), 14);
     const qreal dpr = devicePixelRatioF();
     QMenu menu(this);
@@ -270,6 +282,12 @@ void MainWindow::showAddChannelMenu() {
         return menu.addAction(set, text);
     };
 
+    // A person rather than a channel, so it is first and set apart: it takes no
+    // slot, needs nothing typed, and is the only item here that opens a list.
+    QAction* directMessage = item(QStringLiteral("users"),
+                                  QStringLiteral("New Direct Message"));
+    menu.addSeparator();
+
     QAction* createPrivate = item(QStringLiteral("lock"),
                                   QStringLiteral("Create a Private Channel"));
     QAction* joinPrivate = item(QStringLiteral("lock"),
@@ -281,12 +299,27 @@ void MainWindow::showAddChannelMenu() {
 
     // There is exactly one public channel and its key is a constant, so joining
     // it twice is not a thing to do. The item stays in place rather than
-    // disappearing, so the menu keeps the same four items in the same order
-    // whatever the device holds.
-    joinPublic->setEnabled(!AddChannelDialog::publicChannelJoined(existing));
+    // disappearing, so the menu keeps the same items in the same order whatever
+    // the device holds -- which is also why a device with all eight slots in use
+    // greys the channel items rather than losing them.
+    const bool room = AddChannelDialog::hasFreeSlot(existing);
+    joinPublic->setEnabled(room && !AddChannelDialog::publicChannelJoined(existing));
+    createPrivate->setEnabled(room);
+    joinPrivate->setEnabled(room);
+    joinHashtag->setEnabled(room);
+    if (!room) {
+        // The '+' used to go dead when the slots filled and the reason lived in
+        // its tooltip. Now that it still has a direct conversation to offer, the
+        // reason has to travel with the items that went grey instead -- and a
+        // menu shows an action's tooltip only when asked to.
+        menu.setToolTipsVisible(true);
+        const QString full =
+            QStringLiteral("All %1 channel slots are in use").arg(proto::MaxChannels);
+        for (QAction* action : {createPrivate, joinPrivate, joinPublic, joinHashtag})
+            action->setToolTip(full);
+    }
 
-    QAction* chosen =
-        menu.exec(addChannelButton_->mapToGlobal(QPoint(0, addChannelButton_->height())));
+    QAction* chosen = menu.exec(addButton_->mapToGlobal(QPoint(0, addButton_->height())));
 
     // A popup holds the mouse grab for as long as it is up, so the button that
     // opened it never sees the pointer leave: dismissed with a click somewhere
@@ -294,11 +327,15 @@ void MainWindow::showAddChannelMenu() {
     // when the pointer really has moved off -- clearing the flag under it would
     // unlight a button the cursor is still on and leave it that way, since no
     // second enter is coming.
-    if (!addChannelButton_->rect().contains(
-            addChannelButton_->mapFromGlobal(QCursor::pos()))) {
-        addChannelButton_->setAttribute(Qt::WA_UnderMouse, false);
+    if (!addButton_->rect().contains(addButton_->mapFromGlobal(QCursor::pos()))) {
+        addButton_->setAttribute(Qt::WA_UnderMouse, false);
         QEvent leave(QEvent::Leave);
-        QCoreApplication::sendEvent(addChannelButton_, &leave);
+        QCoreApplication::sendEvent(addButton_, &leave);
+    }
+
+    if (chosen == directMessage) {
+        startDirectConversation();
+        return;
     }
 
     // The public channel is the one kind with nothing to fill in.
@@ -325,6 +362,23 @@ void MainWindow::addChannel(const model::Channel& ch) {
     client_->setChannel(ch.index, ch.name, ch.secret);
 }
 
+void MainWindow::startDirectConversation() {
+    if (client_->state() != proto::CompanionClient::State::Ready) return;
+
+    const QByteArray peerKey = ContactsDialog::pickContact(client_, this);
+    if (peerKey.size() != model::Conversation::IdSize) return;
+
+    // A conversation with somebody already spoken to is simply opened again.
+    // A new one has to exist before it can be selected, and nothing has been
+    // said in it to make it exist, so the row and its settings entry are what
+    // hold it until something is.
+    const model::Conversation peer = model::Conversation::direct(peerKey);
+    conversationModel_->upsertDirect({peer, peerName(peer)});
+    rememberDirectConversation(peer);
+    selectConversation(peer);
+    input_->setFocus(Qt::OtherFocusReason);
+}
+
 void MainWindow::shareCurrentChannel() {
     // Only the device's list carries keys, and a key is the entire invitation:
     // the cached list the sidebar falls back on while offline has nothing to
@@ -335,18 +389,15 @@ void MainWindow::shareCurrentChannel() {
     ShareChannelDialog(*ch, this).exec();
 }
 
-void MainWindow::removeCurrentChannel() {
-    // Taken by value: the dialog below runs an event loop, and a reconnect
-    // re-enumerating the channels underneath it would leave a reference to the
-    // client's vector dangling.
-    const std::optional<model::Channel> ch = currentChannelOnDevice();
-    if (!ch || !isRemovable(*ch)) return;
-
-    // The key lives on the device and nowhere else -- the app caches names only
-    // -- so this is the last chance to say so.
+// Asks before something goes away for good. `impactItems` is the <li> list of
+// what removing this actually costs, which differs enough between a channel
+// whose key lives only on the device and a conversation that is only ever local
+// to be worth spelling out each time.
+bool MainWindow::confirmRemoval(const QString& title, const QString& name,
+                                const QString& impactItems) {
     QDialog dialog(this);
     ui::configureDialogWindow(dialog);
-    dialog.setWindowTitle(QStringLiteral("Remove channel"));
+    dialog.setWindowTitle(title);
 
     const int removeIconSize = theme::scaled(dialog.font(), 40);
     auto* icon = new QLabel;
@@ -355,19 +406,11 @@ void MainWindow::removeCurrentChannel() {
     icon->setFixedSize(removeIconSize, removeIconSize);
     icon->setAlignment(Qt::AlignTop);
 
-    const QString impactItems =
-        ch->type == model::ChannelType::Private
-            ? QStringLiteral("<li>Channel's key will be deleted the device.</li>"
-                             "<li>Channel's messages history will be deleted from this app.</li>"
-                             "<li>You need a copy of the channel key to rejoin.</li>")
-            : QStringLiteral("<li>Channel's key will be deleted the device.</li>"
-                             "<li>Channel's messages history will be deleted from this app.</li>"
-                             "<li>You can rejoin the channel any time.</li>");
     auto* content = new QLabel(
         QStringLiteral("<p style=\"margin: 0;\">Remove <b>%1</b>?</p>"
                        "<ul style=\"margin-top: 8px; margin-bottom: 0; margin-left: 16px; "
                        "margin-right: 0; -qt-list-indent: 0; color: %2;\">%3</ul>")
-            .arg(ch->displayName().toHtmlEscaped(), theme::TextMuted.name(), impactItems));
+            .arg(name.toHtmlEscaped(), theme::TextMuted.name(), impactItems));
     content->setTextFormat(Qt::RichText);
     content->setWordWrap(true);
     content->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -395,10 +438,62 @@ void MainWindow::removeCurrentChannel() {
 
     connect(confirm, &QPushButton::clicked, &dialog, &QDialog::accept);
     connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return;
+    return dialog.exec() == QDialog::Accepted;
+}
+
+void MainWindow::removeCurrentConversation() {
+    if (current_.isDirect()) {
+        const model::Conversation peer = current_;
+        const QString name = peerName(peer);
+        // Nothing on the node knows this conversation exists: it is a row and a
+        // pile of messages in this app's own database, and both go together.
+        if (!confirmRemoval(
+                QStringLiteral("Remove conversation"), name,
+                QStringLiteral("<li>The conversation's messages will be deleted from "
+                               "this app.</li>"
+                               "<li>%1 stays in the node's contacts.</li>"
+                               "<li>A new message from them starts it again.</li>")
+                    .arg(name.toHtmlEscaped())))
+            return;
+
+        const model::HistoryResult forgotten = history_.remove(activeDeviceId_, peer);
+        if (!forgotten) {
+            showNotice(QStringLiteral("Could not delete the conversation: %1")
+                           .arg(forgotten.error),
+                       8000, true);
+            return;
+        }
+        forgetDirectConversation(peer);
+        // forget() takes the row out and the view moves its selection to a
+        // neighbour, so this is what settles on whatever survived rather than
+        // leaving the pane on a conversation that is gone.
+        conversationModel_->forget(peer);
+        restoreSelection(current_);
+        return;
+    }
+
+    // Taken by value: the dialog below runs an event loop, and a reconnect
+    // re-enumerating the channels underneath it would leave a reference to the
+    // client's vector dangling.
+    const std::optional<model::Channel> ch = currentChannelOnDevice();
+    if (!ch || !isRemovable(*ch)) return;
+
+    // The key lives on the device and nowhere else -- the app caches names only
+    // -- so this is the last chance to say so.
+    const QString impactItems =
+        ch->type == model::ChannelType::Private
+            ? QStringLiteral("<li>Channel's key will be deleted the device.</li>"
+                             "<li>Channel's messages history will be deleted from this app.</li>"
+                             "<li>You need a copy of the channel key to rejoin.</li>")
+            : QStringLiteral("<li>Channel's key will be deleted the device.</li>"
+                             "<li>Channel's messages history will be deleted from this app.</li>"
+                             "<li>You can rejoin the channel any time.</li>");
+    if (!confirmRemoval(QStringLiteral("Remove channel"), ch->displayName(), impactItems))
+        return;
 
     showNotice(QStringLiteral("Removing %1...").arg(ch->displayName()), 10000);
-    pendingChannelRemovals_.insert(ch->index, ch->keyFingerprint());
+    pendingChannelRemovals_.insert(ch->index,
+                                   model::Conversation::channel(ch->keyFingerprint()));
     client_->clearChannel(ch->index);
 }
 
@@ -412,49 +507,47 @@ void MainWindow::buildUi() {
     // The title and the channel actions share the header strip: at 480 rows
     // there is no menu bar and no room for a toolbar, so they live beside the
     // label they belong to.
-    auto* channelsHeader = new QWidget;
-    channelsHeader->setObjectName(QStringLiteral("sidebarHeader"));
-    auto* channelsHeaderLayout = new QHBoxLayout(channelsHeader);
-    channelsHeaderLayout->setContentsMargins(10, 4, 6, 4);
-    channelsHeaderLayout->setSpacing(4);
+    auto* sidebarHeader = new QWidget;
+    sidebarHeader->setObjectName(QStringLiteral("sidebarHeader"));
+    auto* sidebarHeaderLayout = new QHBoxLayout(sidebarHeader);
+    sidebarHeaderLayout->setContentsMargins(10, 4, 6, 4);
+    sidebarHeaderLayout->setSpacing(4);
 
-    auto* channelsTitle = new QLabel(QStringLiteral("CHANNELS"));
-    QFont headerFont = theme::secondaryFont(channelsTitle->font());
+    auto* sidebarTitle = new QLabel(QStringLiteral("CONVERSATIONS"));
+    QFont headerFont = theme::secondaryFont(sidebarTitle->font());
     headerFont.setBold(true);
     headerFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
-    channelsTitle->setFont(headerFont);
-    channelsTitle->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
+    sidebarTitle->setFont(headerFont);
+    sidebarTitle->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
     const qreal dpr = devicePixelRatioF();
     const int headerIconSize = theme::scaled(font(), 14);
-    addChannelButton_ =
-        headerButton(QStringLiteral("plus"), theme::Accent, headerIconSize, dpr);
+    addButton_ = headerButton(QStringLiteral("plus"), theme::Accent, headerIconSize, dpr);
     // Share and remove both act on the selected row rather than carrying one of
     // their own: per-row buttons would cost sidebar width the uConsole has not
     // got, and hover affordances are no use on a trackball.
     shareChannelButton_ =
         headerButton(QStringLiteral("share"), theme::Accent, headerIconSize, dpr);
-    removeChannelButton_ =
-        headerButton(QStringLiteral("minus"), theme::Error, headerIconSize, dpr);
+    removeButton_ = headerButton(QStringLiteral("minus"), theme::Error, headerIconSize, dpr);
 
-    channelsHeaderLayout->addWidget(channelsTitle, 1);
-    channelsHeaderLayout->addWidget(shareChannelButton_);
-    channelsHeaderLayout->addWidget(removeChannelButton_);
-    channelsHeaderLayout->addWidget(addChannelButton_);
+    sidebarHeaderLayout->addWidget(sidebarTitle, 1);
+    sidebarHeaderLayout->addWidget(shareChannelButton_);
+    sidebarHeaderLayout->addWidget(removeButton_);
+    sidebarHeaderLayout->addWidget(addButton_);
 
-    channelModel_ = new model::ChannelModel(this);
-    channelList_ = new QListView;
-    channelList_->setObjectName(QStringLiteral("channelList"));
-    channelList_->setModel(channelModel_);
-    channelList_->setItemDelegate(new ChannelDelegate(channelList_));
-    channelList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    channelList_->setSelectionMode(QAbstractItemView::SingleSelection);
-    channelList_->setFocusPolicy(Qt::NoFocus);
+    conversationModel_ = new model::ConversationModel(this);
+    conversationList_ = new QListView;
+    conversationList_->setObjectName(QStringLiteral("conversationList"));
+    conversationList_->setModel(conversationModel_);
+    conversationList_->setItemDelegate(new ConversationDelegate(conversationList_));
+    conversationList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    conversationList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    conversationList_->setFocusPolicy(Qt::NoFocus);
 
     nodePane_ = new NodePane;
 
-    leftLayout->addWidget(channelsHeader);
-    leftLayout->addWidget(channelList_, 1);
+    leftLayout->addWidget(sidebarHeader);
+    leftLayout->addWidget(conversationList_, 1);
     leftLayout->addWidget(nodePane_);
 
     // --- chat ---------------------------------------------------------------
@@ -542,11 +635,11 @@ void MainWindow::buildUi() {
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
     connect(nodePane_, &NodePane::contactsRequested, this, &MainWindow::showContacts);
-    connect(addChannelButton_, &QToolButton::clicked, this, &MainWindow::showAddChannelMenu);
+    connect(addButton_, &QToolButton::clicked, this, &MainWindow::showAddMenu);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
-    connect(removeChannelButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentChannel);
-    connect(channelList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
-            &MainWindow::onChannelSelected);
+    connect(removeButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentConversation);
+    connect(conversationList_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &MainWindow::onConversationSelected);
     connect(sendAction_, &QAction::triggered, this, &MainWindow::onSendClicked);
     connect(input_, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
     // Connected after the counter's own, so this reads a field already held
@@ -556,7 +649,7 @@ void MainWindow::buildUi() {
     // The uConsole panel is 1280x480; this is a sane default anywhere else.
     resize(1024, 480);
     updateInputState();
-    updateChannelActions();
+    updateConversationActions();
     updateHeader();
 }
 
@@ -615,7 +708,10 @@ void MainWindow::loadCachedChannels() {
                                                    const model::Channel& b) {
         return a.index < b.index;
     });
-    if (!channels.isEmpty()) showChannels(channels);
+    // Unconditionally, unlike the channels themselves: a device with nothing
+    // cached still has direct conversations to show, and showChannels() is what
+    // builds them.
+    showChannels(channels);
 }
 
 void MainWindow::saveCachedChannels(const QVector<model::Channel>& channels) {
@@ -641,45 +737,134 @@ void MainWindow::saveCachedChannels(const QVector<model::Channel>& channels) {
 }
 
 void MainWindow::showChannels(const QVector<model::Channel>& channels) {
-    QByteArray wantedKey = currentChannelKey();
-    if (wantedKey.isEmpty() && activeDeviceId_.size() == 32) {
+    const model::Conversation wanted =
+        current_.isValid() ? current_ : rememberedConversation();
+
+    conversationModel_->setChannels(channels);
+    // The channel enumeration says nothing about peers, but it does reset the
+    // rows, and the direct conversations belong to the same device.
+    loadDirectConversations();
+    hydratePreviews();
+    restoreSelection(wanted);
+}
+
+void MainWindow::loadDirectConversations() {
+    if (activeDeviceId_.size() != 32) {
+        conversationModel_->setDirectConversations({});
+        return;
+    }
+
+    // Nothing on the node enumerates these: a conversation exists because
+    // somebody said something in it, or because somebody opened it and has not
+    // yet -- which lives in settings and nowhere else.
+    QVector<model::Conversation> peers;
+    const model::HistoryConversations stored = history_.directConversations(activeDeviceId_);
+    if (!stored.result)
+        onStorageFailure(QStringLiteral("read the direct conversations"), stored.result);
+    else
+        peers = stored.conversations;
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("directs"));
+    for (const QString& key : settings.childGroups()) {
+        const model::Conversation peer =
+            model::Conversation::direct(QByteArray::fromHex(key.toLatin1()));
+        if (peer.isValid() && !peers.contains(peer)) peers.append(peer);
+    }
+    settings.endGroup();
+    settings.endGroup();
+
+    QVector<model::ConversationEntry> rows;
+    rows.reserve(peers.size());
+    for (const model::Conversation& peer : peers) rows.append({peer, peerName(peer)});
+    conversationModel_->setDirectConversations(rows);
+}
+
+void MainWindow::rememberDirectConversation(const model::Conversation& conversation) {
+    if (activeDeviceId_.size() != 32 || !conversation.isDirect() || !conversation.isValid())
+        return;
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("directs"));
+    settings.beginGroup(QString::fromLatin1(conversation.id.toHex()));
+    // The name only, and only as a fallback for when the address book cannot be
+    // reached: the node's contact store is the authority on who a key is.
+    // Written even when there is no name to write, because the entry existing
+    // is what holds a conversation nothing has been said in yet.
+    const model::Contact* peer = client_->contactFor(conversation);
+    settings.setValue(QStringLiteral("name"), peer ? peer->displayName() : QString());
+    settings.endGroup();
+    settings.endGroup();
+    settings.endGroup();
+}
+
+void MainWindow::forgetDirectConversation(const model::Conversation& conversation) {
+    if (activeDeviceId_.size() != 32 || !conversation.isValid()) return;
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("directs"));
+    settings.remove(QString::fromLatin1(conversation.id.toHex()));
+    settings.endGroup();
+    settings.endGroup();
+}
+
+QString MainWindow::peerName(const model::Conversation& conversation) const {
+    if (!conversation.isDirect() || conversation.id.isEmpty()) return {};
+
+    if (const model::Contact* peer = client_->contactFor(conversation))
+        return peer->displayName();
+
+    if (activeDeviceId_.size() == 32) {
         QSettings settings;
         settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
-        wantedKey = QByteArray::fromHex(
-            settings.value(QStringLiteral("selectedChannel")).toString().toLatin1());
-        settings.endGroup();
+        settings.beginGroup(QStringLiteral("directs"));
+        settings.beginGroup(QString::fromLatin1(conversation.id.toHex()));
+        const QString cached = settings.value(QStringLiteral("name")).toString();
+        if (!cached.isEmpty()) return cached;
     }
 
-    channelModel_->setChannels(channels);
+    // Nothing has ever named this key. The leading bytes are how the daemon's
+    // logs refer to such a node, and they are at least unique -- and they are
+    // all a peer heard from before the address book caught up has to offer.
+    return QString::fromLatin1(conversation.id.left(3).toHex());
+}
 
-    for (const model::Channel& ch : channels) {
+void MainWindow::hydratePreviews() {
+    if (activeDeviceId_.size() != 32) return;
+
+    for (int row = 0; row < conversationModel_->rowCount(); row++) {
+        const model::Conversation conversation = conversationModel_->conversationAt(row);
+        const model::ConversationEntry* entry = conversationModel_->entry(conversation);
         const model::HistoryLatest latest = history_.latestMessage(
-            activeDeviceId_, model::Conversation::channel(ch.keyFingerprint()), ch.index);
-        // One broken database breaks all eight lookups; say so once and stop
-        // asking rather than paint the sidebar as eight empty conversations.
+            activeDeviceId_, conversation, entry ? entry->channelIndex : -1);
+        // One broken database breaks every lookup; say so once and stop asking
+        // rather than paint the sidebar as a screenful of empty conversations.
         if (!latest.result) {
             onStorageFailure(QStringLiteral("read the message history"), latest.result);
-            break;
+            return;
         }
-        if (latest.message) channelModel_->setLastMessage(ch.index, *latest.message);
+        if (latest.message) conversationModel_->setLastMessage(conversation, *latest.message);
     }
+}
 
-    // Selection follows the channel key, not its former wire slot. If that
-    // channel is gone, fall back to the first channel on this device.
-    int wantedRow = channelModel_->rowForKey(wantedKey);
-    if (wantedRow < 0 && !channels.isEmpty()) wantedRow = 0;
-    const int wanted = wantedRow < 0 ? -1 : channelModel_->channelIndexForRow(wantedRow);
+void MainWindow::restoreSelection(model::Conversation wanted) {
+    // Selection follows the conversation, never a former wire slot. If it is
+    // gone -- a channel removed or dropped by the device, a conversation
+    // deleted -- fall back to the top of the list.
+    if (conversationModel_->rowFor(wanted) < 0) wanted = conversationModel_->conversationAt(0);
 
-    // Force showChannel() to reload: the rows are new, and the open channel may
-    // be gone from the list altogether -- removed, or dropped by the device --
-    // in which case selectChannel() has nothing to open and the pane is left
-    // showing a conversation that no longer belongs to anything.
-    currentChannel_ = -1;
+    // Force showConversation() to reload: the rows are new, and the open
+    // conversation may be gone from the list altogether, in which case the pane
+    // would be left showing something that belongs to nothing.
+    current_ = {};
     chatModel_->setMessages({});
-    selectChannel(wanted);
+    selectConversation(wanted);
     updateHeader();
     updateInputState();
-    updateChannelActions();
+    updateConversationActions();
 }
 
 void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& error) {
@@ -691,12 +876,12 @@ void MainWindow::onChannelSaveResult(int channelIndex, bool ok, const QString& e
     // The sidebar was rebuilt before this arrived, so the slot is there to open.
     // The user asked for it a moment ago; showing it is what they meant.
     hideNotice();
-    selectChannel(channelIndex);
-    updateChannelActions();
+    selectConversation(conversationModel_->channelAt(channelIndex));
+    updateConversationActions();
 }
 
 void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString& error) {
-    const QByteArray channelKey = pendingChannelRemovals_.take(channelIndex);
+    const model::Conversation channel = pendingChannelRemovals_.take(channelIndex);
     if (!ok) {
         showNotice(QStringLiteral("Could not remove the channel: %1").arg(error), 8000, true);
         return;
@@ -706,8 +891,7 @@ void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString&
     // channel. Its key fingerprint was retained before the slot was cleared so
     // only this device's copy of that channel history is removed.
     hideNotice();
-    const model::HistoryResult forgotten =
-        history_.remove(activeDeviceId_, model::Conversation::channel(channelKey));
+    const model::HistoryResult forgotten = history_.remove(activeDeviceId_, channel);
     // The channel is gone from the device either way, so this is not a failed
     // removal -- it is messages left behind for a channel that can no longer be
     // opened, which the user is owed the chance to clear up.
@@ -715,62 +899,69 @@ void MainWindow::onChannelRemoveResult(int channelIndex, bool ok, const QString&
         showNotice(QStringLiteral("Channel removed, but its messages could not be deleted: %1")
                        .arg(forgotten.error),
                    8000, true);
-    channelModel_->forget(channelKey);
-    updateChannelActions();
+    conversationModel_->forget(channel);
+    updateConversationActions();
 }
 
-void MainWindow::selectChannel(int channelIndex) {
-    const int row = channelModel_->rowForIndex(channelIndex);
+void MainWindow::selectConversation(const model::Conversation& conversation) {
+    const int row = conversationModel_->rowFor(conversation);
     if (row < 0) {
-        showChannel(-1);
+        conversationList_->setCurrentIndex({});
+        showConversation({});
         return;
     }
-    channelList_->setCurrentIndex(channelModel_->index(row));
-    // A reconnect resets the channel model, but the selected slot may land on
-    // the same row as before. Do not depend on QItemSelectionModel deciding
-    // that this is a current-index change: the refreshed channel list must
-    // always reload its conversation from the updated history.
-    showChannel(channelIndex);
+    conversationList_->setCurrentIndex(conversationModel_->index(row));
+    // A reconnect resets the model, but the conversation may land on the same
+    // row as before. Do not depend on QItemSelectionModel deciding that this is
+    // a current-index change: the refreshed list must always reload from the
+    // updated history.
+    showConversation(conversation);
 }
 
-void MainWindow::onChannelSelected(const QModelIndex& current, const QModelIndex&) {
-    showChannel(current.isValid() ? channelModel_->channelIndexForRow(current.row()) : -1);
+void MainWindow::onConversationSelected(const QModelIndex& current, const QModelIndex&) {
+    showConversation(current.isValid() ? conversationModel_->conversationAt(current.row())
+                                       : model::Conversation());
 }
 
-void MainWindow::showChannel(int channelIndex) {
-    if (channelIndex == currentChannel_) return;
-    currentChannel_ = channelIndex;
+void MainWindow::showConversation(const model::Conversation& conversation) {
+    if (conversation == current_) return;
+    current_ = conversation;
 
-    const QByteArray channelKey = currentChannelKey();
-    const int unseenCount = channelModel_->unreadCount(channelIndex);
-    QVector<model::Message> conversation;
-    if (channelIndex >= 0 && activeDeviceId_.size() == 32) {
-        model::HistoryMessages stored = history_.messages(
-            activeDeviceId_, model::Conversation::channel(channelKey), channelIndex);
+    const int unseenCount = conversationModel_->unreadCount(conversation);
+    QVector<model::Message> messages;
+    if (conversation.isValid() && activeDeviceId_.size() == 32) {
+        model::HistoryMessages stored =
+            history_.messages(activeDeviceId_, conversation, currentChannelIndex());
         // An unreadable conversation must not be shown as an empty one: a
         // database that stopped opening would otherwise look exactly like a
         // channel nobody has said anything on.
         if (stored.result)
-            conversation = std::move(stored.messages);
+            messages = std::move(stored.messages);
         else
             onStorageFailure(QStringLiteral("read the conversation"), stored.result);
     }
-    chatModel_->setMessages(conversation, unseenCount);
-    channelModel_->clearUnread(channelIndex);
-    if (channelIndex >= 0 && !channelKey.isEmpty() && activeDeviceId_.size() == 32) {
-        QSettings settings;
-        settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
-        settings.setValue(QStringLiteral("selectedChannel"),
-                          QString::fromLatin1(channelKey.toHex()));
-        settings.endGroup();
+    // Everything incoming here came from the one peer, so it is drawn under the
+    // name that peer goes by now rather than the one it had when each message
+    // arrived -- a rename should not leave a conversation full of old names.
+    if (conversation.isDirect()) {
+        const QString name = peerName(conversation);
+        for (model::Message& msg : messages)
+            if (!msg.outgoing) msg.sender = name;
     }
+    chatModel_->setMessages(messages, unseenCount);
+    conversationModel_->clearUnread(conversation);
+    if (conversation.isValid() && activeDeviceId_.size() == 32)
+        rememberConversation(conversation);
     updateHeader();
     updateInputState();
-    // Removing acts on the selection, so the button follows it.
-    updateChannelActions();
+    // A direct message's budget is a constant and a channel's moves with the
+    // node's name, so the counter follows the selection too.
+    updateMessageBudget();
+    // Sharing and removing act on the selection, so the buttons follow it.
+    updateConversationActions();
 
     // Lay out first, then show the boundary of anything that arrived while the
-    // channel was closed. With no unseen messages, retain the usual newest-row
+    // conversation was closed. With no unseen messages, retain the usual newest-row
     // anchor. Scrolling before the delegate sizes the rows lands incorrectly.
     messageDelegate_->setViewportWidth(chatView_->viewport()->width());
     QTimer::singleShot(0, this, [this] {
@@ -782,38 +973,74 @@ void MainWindow::showChannel(int channelIndex) {
     });
 }
 
-QByteArray MainWindow::currentChannelKey() const {
-    return currentChannel_ < 0 ? QByteArray() : channelModel_->keyForIndex(currentChannel_);
+int MainWindow::currentChannelIndex() const {
+    const model::ConversationEntry* entry = conversationModel_->entry(current_);
+    return entry ? entry->channelIndex : -1;
 }
 
 std::optional<model::Channel> MainWindow::currentChannelOnDevice() const {
     // Only the device's own list carries keys, and the type is derived from the
     // key: the cached list the sidebar shows while offline cannot answer this.
-    if (client_->state() != proto::CompanionClient::State::Ready || currentChannel_ < 0)
+    if (client_->state() != proto::CompanionClient::State::Ready || !current_.isChannel())
         return std::nullopt;
     for (const model::Channel& ch : client_->channels())
-        if (ch.index == currentChannel_) return ch;
+        if (model::Conversation::channel(ch.keyFingerprint()) == current_) return ch;
     return std::nullopt;
 }
 
+model::Conversation MainWindow::rememberedConversation() const {
+    if (activeDeviceId_.size() != 32) return {};
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("selectedConversation"));
+    const model::Conversation remembered {
+        model::conversationKindFromInt(settings.value(QStringLiteral("kind")).toInt()),
+        QByteArray::fromHex(settings.value(QStringLiteral("id")).toString().toLatin1())};
+    settings.endGroup();
+    if (remembered.isValid()) return remembered;
+
+    // What versions before direct conversations wrote: a channel fingerprint
+    // under its own key, and nothing to say which kind it was because there was
+    // only the one.
+    const model::Conversation channel = model::Conversation::channel(QByteArray::fromHex(
+        settings.value(QStringLiteral("selectedChannel")).toString().toLatin1()));
+    settings.endGroup();
+    return channel.isValid() ? channel : model::Conversation();
+}
+
+void MainWindow::rememberConversation(const model::Conversation& conversation) {
+    if (activeDeviceId_.size() != 32 || !conversation.isValid()) return;
+
+    QSettings settings;
+    settings.beginGroup(deviceSettingsGroup(activeDeviceId_));
+    settings.beginGroup(QStringLiteral("selectedConversation"));
+    settings.setValue(QStringLiteral("kind"), int(conversation.kind));
+    settings.setValue(QStringLiteral("id"), QString::fromLatin1(conversation.id.toHex()));
+    settings.endGroup();
+    settings.endGroup();
+}
+
 void MainWindow::updateHeader() {
-    if (currentChannel_ < 0) {
-        header_->setText(channelModel_->rowCount() == 0
-                             ? QStringLiteral("<b>No channels</b>")
-                             : QStringLiteral("<b>Select a channel</b>"));
+    const model::ConversationEntry* entry = conversationModel_->entry(current_);
+    if (!entry) {
+        header_->setText(conversationModel_->rowCount() == 0
+                             ? QStringLiteral("<b>No conversations</b>")
+                             : QStringLiteral("<b>Select a conversation</b>"));
         return;
     }
 
-    // Only the conversation's own name and its slot: who we are and what the
-    // radio is doing belong to the node pane, which says it once instead of on
-    // every channel. The slot is useful when cross-checking against the daemon,
-    // though persistence follows the channel key rather than this wire address.
-    const int row = channelModel_->rowForIndex(currentChannel_);
-    const QString name = channelModel_->data(channelModel_->index(row),
-                                             model::ChannelModel::NameRole).toString();
+    // Only the conversation's own name and what addresses it: who we are and
+    // what the radio is doing belong to the node pane, which says it once
+    // instead of on every row. For a channel that address is the wire slot,
+    // useful when cross-checking against the daemon though persistence follows
+    // the key; for a peer it is the leading bytes of the key itself, which is
+    // the only thing that tells two nodes of the same name apart.
+    const QString address = current_.isDirect()
+                                ? QString::fromLatin1(current_.id.left(3).toHex())
+                                : QString::number(entry->channelIndex);
     header_->setText(QStringLiteral("<b>%1</b> <span style=\"color: %2;\">[%3]</span>")
-                         .arg(name.toHtmlEscaped(), theme::TextMuted.name())
-                         .arg(currentChannel_));
+                         .arg(entry->name.toHtmlEscaped(), theme::TextMuted.name(), address));
 }
 
 void MainWindow::showNotice(const QString& text, int ms, bool error) {
@@ -861,17 +1088,34 @@ void MainWindow::resolveDirectPeers() {
         return;
     }
 
+    model::Conversation wanted = current_;
+    bool moved = false;
     for (const model::Conversation& conversation : stored.conversations) {
         if (conversation.resolved()) continue;
         const model::Contact* peer = client_->contactFor(conversation);
         if (!peer) continue;  // still nobody this end can name; it keeps
-        const model::HistoryResult moved =
+        const model::HistoryResult folded =
             history_.resolvePeer(activeDeviceId_, peer->pubkey);
-        if (!moved) {
-            onStorageFailure(QStringLiteral("place a collected direct message"), moved);
+        if (!folded) {
+            onStorageFailure(QStringLiteral("place a collected direct message"), folded);
             return;
         }
+        const model::Conversation resolved = model::Conversation::direct(peer->pubkey);
+        forgetDirectConversation(conversation);
+        rememberDirectConversation(resolved);
+        // The open conversation follows its peer rather than emptying out under
+        // the reader.
+        if (current_ == conversation) wanted = resolved;
+        moved = true;
     }
+
+    // The rows have to be rebuilt whether or not anything moved: the address
+    // book arriving is also what puts names to peers the sidebar was drawing as
+    // hex, and either way the previews follow.
+    loadDirectConversations();
+    hydratePreviews();
+    if (moved || conversationModel_->rowFor(current_) < 0) restoreSelection(wanted);
+    else selectConversation(wanted);
 }
 
 void MainWindow::preflightStorage() {
@@ -934,18 +1178,18 @@ void MainWindow::onMessageReceived(const model::Message& msg) {
         return;
     }
 
-    channelModel_->setLastMessage(msg.channelIndex, msg);
+    conversationModel_->setLastMessage(conversation, msg);
 
-    if (msg.channelIndex == currentChannel_)
+    if (conversation == current_)
         appendToView(msg);
     else
-        channelModel_->bumpUnread(msg.channelIndex);
+        conversationModel_->bumpUnread(conversation);
 }
 
 void MainWindow::onDirectMessageReceived(const model::Message& msg) {
-    // v1 has no DM view, but SYNC_NEXT_MESSAGE already popped this from the
-    // daemon's inbox: not writing it down would destroy it. It goes to the same
-    // device database under channel -1, ready for whenever DMs are built out.
+    // Written down before anything is drawn: SYNC_NEXT_MESSAGE has already
+    // popped this from the daemon's inbox, so a row on screen that never
+    // reached the database is a message that exists nowhere.
     const bool knownDevice = activeDeviceId_.size() == 32;
     const model::HistoryResult stored =
         history_.append(knownDevice ? activeDeviceId_ : model::History::orphanDeviceId(),
@@ -954,13 +1198,35 @@ void MainWindow::onDirectMessageReceived(const model::Message& msg) {
         onStorageFailure(QStringLiteral("save a received direct message"), stored);
         return;
     }
+    if (!knownDevice) {
+        // No device identity yet means no database of its own to file this
+        // under and no sidebar to hang it on, so the only honest thing left is
+        // to say it happened.
+        showNotice(QStringLiteral("A direct message arrived before the node identified "
+                                  "itself; it was saved out of the way."),
+                   8000, true);
+        return;
+    }
 
-    // Counted only once it is on disk, so the number on screen is the number
-    // that can still be read back.
-    directMessageCount_++;
-    showNotice(QStringLiteral("%1 direct message(s) received and saved — no DM view yet")
-                   .arg(directMessageCount_),
-               8000);
+    // Nothing enumerates direct conversations, so hearing from somebody is what
+    // creates the row -- and it is remembered so the conversation is still
+    // there, with a name on it, the next time the app starts offline.
+    const model::Conversation conversation = msg.conversation;
+    const QString name = peerName(conversation);
+    conversationModel_->upsertDirect({conversation, name});
+    rememberDirectConversation(conversation);
+    conversationModel_->setLastMessage(conversation, msg);
+
+    if (conversation == current_) {
+        // Drawn under the name the peer goes by now, which is what reopening
+        // the conversation would show: the name stored with the message is only
+        // the fallback for when nothing can be asked.
+        model::Message shown = msg;
+        shown.sender = name;
+        appendToView(shown);
+    } else {
+        conversationModel_->bumpUnread(conversation);
+    }
 }
 
 void MainWindow::appendToView(const model::Message& msg) {
@@ -977,10 +1243,12 @@ void MainWindow::appendToView(const model::Message& msg) {
 
 void MainWindow::onSendClicked() {
     const QString text = input_->text().trimmed();
-    if (text.isEmpty() || currentChannel_ < 0) return;
+    if (text.isEmpty() || !current_.isValid()) return;
     if (client_->state() != proto::CompanionClient::State::Ready) return;
-    const QByteArray channelKey = currentChannelKey();
-    if (activeDeviceId_.size() != 32 || channelKey.size() != 32) return;
+    if (activeDeviceId_.size() != 32) return;
+
+    const int channelIndex = currentChannelIndex();
+    if (current_.isChannel() && channelIndex < 0) return;
 
     input_->clear();
 
@@ -989,8 +1257,12 @@ void MainWindow::onSendClicked() {
     // pending straight away -- the daemon answering is what a reader is waiting
     // to know about, and an empty pane while it does says nothing.
     model::Message msg;
-    msg.channelIndex = currentChannel_;
-    msg.sender = client_->device().name;
+    msg.conversation = current_;
+    msg.channelIndex = channelIndex;
+    // The node prepends its own name to a channel message because nothing else
+    // in one says who spoke. A direct message needs none: only the recipient's
+    // key opens it, so who it is from is not in question.
+    msg.sender = current_.isChannel() ? client_->device().name : QString();
     msg.text = text;
     msg.timestamp = QDateTime::currentDateTime();
     msg.outgoing = true;
@@ -999,9 +1271,12 @@ void MainWindow::onSendClicked() {
 
     // Registered before the command goes out: a send refused on the spot answers
     // from inside the call below.
-    pendingSends_.insert(msg.sendToken, {msg, activeDeviceId_, channelKey});
+    pendingSends_.insert(msg.sendToken, {msg, activeDeviceId_, current_});
     appendToView(msg);
-    client_->sendChannelMessage(msg.channelIndex, msg.text, msg.sendToken);
+    if (current_.isDirect())
+        client_->sendDirectMessage(current_, msg.text, msg.sendToken);
+    else
+        client_->sendChannelMessage(channelIndex, msg.text, msg.sendToken);
 }
 
 void MainWindow::onSendResult(int token, bool ok, const QString& error) {
@@ -1016,7 +1291,7 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
         chatModel_->removePending(token);
         showNotice(QStringLiteral("Could not send: %1").arg(error), 6000, true);
         // Hand the text back rather than losing it to a failed send.
-        if (pending.deviceId == activeDeviceId_ && pending.channelKey == currentChannelKey() &&
+        if (pending.deviceId == activeDeviceId_ && pending.conversation == current_ &&
             input_->text().isEmpty())
             input_->setText(msg.text);
         return;
@@ -1026,75 +1301,82 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
     // the daemon's inbox, and a message that never left has no business in it.
     msg.sendState = model::Message::SendState::Sent;
     msg.sendToken = 0;
-    const model::HistoryResult stored = history_.append(
-        pending.deviceId, model::Conversation::channel(pending.channelKey), msg);
+    const model::HistoryResult stored =
+        history_.append(pending.deviceId, pending.conversation, msg);
     // The message did go out, so it stays on screen; what it says about storage
     // is the same as any other failed write, and collection stops on it.
     if (!stored) onStorageFailure(QStringLiteral("save a sent message"), stored);
 
     const bool stillShowingDevice = pending.deviceId == activeDeviceId_;
-    const int row = stillShowingDevice ? channelModel_->rowForKey(pending.channelKey) : -1;
-    if (row >= 0) {
-        msg.channelIndex = channelModel_->channelIndexForRow(row);
-        channelModel_->setLastMessage(msg.channelIndex, msg);
-    }
+    if (stillShowingDevice) conversationModel_->setLastMessage(pending.conversation, msg);
     // The row it went up as is gone if the conversation was reloaded meanwhile.
-    // Put the message back when that happened to the channel being looked at;
-    // any other channel reads it from history when it is opened.
+    // Put the message back when that happened to the conversation being looked
+    // at; any other one reads it from history when it is opened.
     if (!chatModel_->markSent(token) && stillShowingDevice &&
-        pending.channelKey == currentChannelKey())
+        pending.conversation == current_)
         appendToView(msg);
 }
 
 // The node prepends its own name to every channel message it sends, so what is
 // left for the body moves with that name: connecting, or moving to a node called
-// something else, is what makes this a budget rather than a constant.
+// something else, is what makes this a budget rather than a constant. A direct
+// message carries no such prefix and gets the whole payload.
 void MainWindow::updateMessageBudget() {
-    messageLimit_->setBudget(proto::maxMessageBytes(client_->device().name));
+    messageLimit_->setBudget(current_.isDirect()
+                                 ? proto::MaxDirectTextBytes
+                                 : proto::maxMessageBytes(client_->device().name));
     updateInputState();
 }
 
 void MainWindow::updateInputState() {
     const bool ready = client_->state() == proto::CompanionClient::State::Ready;
-    const bool canType = ready && currentChannel_ >= 0;
+    const bool canType = ready && current_.isValid();
     const bool becameAvailable = canType && !input_->isEnabled();
     input_->setEnabled(canType);
     // No length test: the counter holds the box inside the budget, so whatever
     // is in it fits.
     sendAction_->setEnabled(canType && !input_->text().trimmed().isEmpty());
     input_->setPlaceholderText(canType ? QStringLiteral("Message")
-                               : ready ? QStringLiteral("Select a channel")
+                               : ready ? QStringLiteral("Select a conversation")
                                        : QStringLiteral("Waiting for a connection..."));
     if (becameAvailable) input_->setFocus(Qt::OtherFocusReason);
 }
 
-void MainWindow::updateChannelActions() {
+void MainWindow::updateConversationActions() {
     const bool ready = client_->state() == proto::CompanionClient::State::Ready;
-    const bool room = AddChannelDialog::hasFreeSlot(client_->channels());
-    addChannelButton_->setEnabled(ready && room);
-    addChannelButton_->setToolTip(!room ? QStringLiteral("All %1 channel slots are in use")
-                                              .arg(proto::MaxChannels)
-                                 : ready ? QStringLiteral("Add a channel")
-                                         : QStringLiteral("Connect to add a channel"));
+    // A direct conversation takes no slot, so a device with all eight channels
+    // in use still has something to offer here; it is the channel items inside
+    // the menu that go grey.
+    addButton_->setEnabled(ready);
+    addButton_->setToolTip(ready ? QStringLiteral("Start a conversation")
+                                 : QStringLiteral("Connect to start a conversation"));
 
-    const std::optional<model::Channel> current = currentChannelOnDevice();
+    const std::optional<model::Channel> channel = currentChannelOnDevice();
     // Any channel can be shared, including the public ones nobody needs an
     // invitation to: what stops it is not having the key, which is the case
-    // whenever the list on screen came from the offline cache.
-    shareChannelButton_->setEnabled(current.has_value());
+    // whenever the list on screen came from the offline cache. A peer has no
+    // key of ours to pass on -- an invitation to a conversation with somebody
+    // is their contact card, which is #22.
+    shareChannelButton_->setEnabled(channel.has_value());
     shareChannelButton_->setToolTip(
-        !ready     ? QStringLiteral("Connect to share a channel")
-        : !current ? QStringLiteral("Select a channel to share")
-                   : QStringLiteral("Share %1").arg(current->displayName()));
+        current_.isDirect() ? QStringLiteral("Only a channel can be shared")
+        : !ready            ? QStringLiteral("Connect to share a channel")
+        : !channel          ? QStringLiteral("Select a channel to share")
+                            : QStringLiteral("Share %1").arg(channel->displayName()));
 
-    const bool removable = current && isRemovable(*current);
-    removeChannelButton_->setEnabled(removable);
-    removeChannelButton_->setToolTip(
-        !ready     ? QStringLiteral("Connect to remove a channel")
-        : !current ? QStringLiteral("Select a channel to remove")
-        : removable
-            ? QStringLiteral("Remove %1").arg(current->displayName())
-            : QStringLiteral("The Public channel cannot be removed"));
+    // Removing a channel is a write to the device; removing a direct
+    // conversation only deletes this app's copy of it, which works offline.
+    const model::ConversationEntry* entry = conversationModel_->entry(current_);
+    const bool removable =
+        current_.isDirect() ? entry != nullptr : (channel && isRemovable(*channel));
+    removeButton_->setEnabled(removable);
+    removeButton_->setToolTip(
+        current_.isDirect() && entry
+            ? QStringLiteral("Delete the conversation with %1").arg(entry->name)
+        : !ready    ? QStringLiteral("Connect to remove a channel")
+        : !channel  ? QStringLiteral("Select a conversation to remove")
+        : removable ? QStringLiteral("Remove %1").arg(channel->displayName())
+                    : QStringLiteral("The Public channel cannot be removed"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,7 +1437,7 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
     }
     nodePane_->setConnection(label, color, client_->isRunning(), state == State::Ready);
     updateInputState();
-    updateChannelActions();
+    updateConversationActions();
 }
 
 void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
@@ -1164,14 +1446,15 @@ void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {
         // on the cryptographic identity, then show only that device's cache
         // while its live channel enumeration completes.
         activeDeviceId_ = info.pubkey;
-        currentChannel_ = -1;
-        channelModel_->clearTransientState();
-        channelModel_->setChannels({});
+        current_ = {};
+        conversationModel_->clearTransientState();
+        conversationModel_->setChannels({});
+        conversationModel_->setDirectConversations({});
         chatModel_->setMessages({});
         loadCachedChannels();
         updateHeader();
         updateInputState();
-        updateChannelActions();
+        updateConversationActions();
     }
     // SELF_INFO is the first thing a handshake answers and channel enumeration
     // -- which ends by starting the inbox drain -- is queued behind it, so this

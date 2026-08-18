@@ -1,5 +1,7 @@
 #include "ui/contacts_dialog.h"
 
+#include <QAbstractButton>
+#include <QPushButton>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -103,9 +105,19 @@ private:
 }  // namespace
 
 ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
-    : QDialog(parent), client_(client) {
+    : ContactsDialog(client, Mode::Browse, parent) {}
+
+QByteArray ContactsDialog::pickContact(proto::CompanionClient* client, QWidget* parent) {
+    ContactsDialog dialog(client, Mode::Pick, parent);
+    if (dialog.exec() != QDialog::Accepted) return {};
+    return dialog.chosenKey();
+}
+
+ContactsDialog::ContactsDialog(proto::CompanionClient* client, Mode mode, QWidget* parent)
+    : QDialog(parent), client_(client), mode_(mode) {
     ui::configureDialogWindow(*this);
-    setWindowTitle(QStringLiteral("Contacts"));
+    setWindowTitle(mode_ == Mode::Pick ? QStringLiteral("New direct message")
+                                       : QStringLiteral("Contacts"));
 
     model_ = new model::ContactModel(this);
     auto* visibleContacts = new ContactSortFilterModel(this);
@@ -117,10 +129,13 @@ ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
     list_->setModel(visibleContacts);
     list_->setItemDelegate(new ContactDelegate(list_));
     list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    // Nothing can be done to a contact yet, so a row that highlighted under the
-    // pointer would be offering something that is not there.
-    list_->setSelectionMode(QAbstractItemView::NoSelection);
-    list_->setFocusPolicy(Qt::NoFocus);
+    // Browsing, nothing can be done to a contact, so a row that highlighted
+    // under the pointer would be offering something that is not there. Picking,
+    // the row *is* the answer.
+    const bool picking = mode_ == Mode::Pick;
+    list_->setSelectionMode(picking ? QAbstractItemView::SingleSelection
+                                    : QAbstractItemView::NoSelection);
+    list_->setFocusPolicy(picking ? Qt::StrongFocus : Qt::NoFocus);
     list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     // Every row is the same three lines tall, which is what lets the view size
     // the list from one of them instead of all hundred.
@@ -211,7 +226,16 @@ ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
                     ContactSortFilterModel::SortMode(sort->itemData(index).toInt()));
             });
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    auto* buttons = new QDialogButtonBox(picking ? QDialogButtonBox::Cancel
+                                                 : QDialogButtonBox::Close);
+    if (picking) {
+        // "Message", not "OK": what the button does is open a conversation with
+        // whoever is selected, and nothing is written to the node by choosing.
+        accept_ = buttons->addButton(QStringLiteral("Message"),
+                                     QDialogButtonBox::AcceptRole);
+        accept_->setDefault(true);
+        accept_->setEnabled(false);
+    }
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(12, 10, 12, 10);
@@ -222,6 +246,16 @@ ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
     layout->addWidget(buttons);
 
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    if (picking) {
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(list_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+                [this] { updateChoice(); });
+        // Double-clicking a row is the same act as selecting it and pressing
+        // the button, and it is what a list of people invites.
+        connect(list_, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
+            if (index.isValid()) accept();
+        });
+    }
     connect(client_, &proto::CompanionClient::contactsChanged, this,
             [this](const QVector<model::Contact>& contacts) {
                 model_->setContacts(contacts);
@@ -239,6 +273,7 @@ ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
 
     model_->setContacts(client_->contacts());
     updatePlaceholder();
+    updateChoice();
 
     // Not lockDialogSize(): a list has no content height to be fixed to, and
     // this one is worth dragging taller on a screen with the room. Short enough
@@ -247,10 +282,21 @@ ContactsDialog::ContactsDialog(proto::CompanionClient* client, QWidget* parent)
     setMinimumSize(320, 220);
 }
 
+QByteArray ContactsDialog::chosenKey() const {
+    const QModelIndex current = list_->currentIndex();
+    if (!current.isValid()) return {};
+    return current.data(model::ContactModel::PublicKeyRole).toByteArray();
+}
+
+void ContactsDialog::updateChoice() {
+    if (accept_) accept_->setEnabled(!chosenKey().isEmpty());
+}
+
 void ContactsDialog::updatePlaceholder() {
     const bool empty = list_->model()->rowCount() == 0;
     list_->setVisible(!empty);
     placeholder_->setVisible(empty);
+    updateChoice();
     if (!empty) return;
 
     if (model_->rowCount() != 0) {

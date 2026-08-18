@@ -1,10 +1,11 @@
-#include "ui/channel_delegate.h"
+#include "ui/conversation_delegate.h"
 
+#include <QApplication>
 #include <QFontMetrics>
 #include <QPainter>
 #include <QWidget>
 
-#include "model/channel_model.h"
+#include "model/conversation_model.h"
 #include "ui/icons.h"
 #include "ui/row_format.h"
 #include "ui/theme.h"
@@ -28,16 +29,20 @@ QFont nameFont(const QFont& base) {
 
 }  // namespace
 
-QSize ChannelDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex&) const {
+ConversationDelegate::ConversationDelegate(QObject* parent)
+    : QStyledItemDelegate(parent), avatar_(QApplication::font()) {}
+
+QSize ConversationDelegate::sizeHint(const QStyleOptionViewItem& option,
+                                     const QModelIndex&) const {
     const int text = QFontMetrics(nameFont(option.font)).height() + LineGap +
                      QFontMetrics(theme::secondaryFont(option.font)).height();
     return QSize(0, qMax(text, theme::scaled(option.font, IconSize)) + 2 * VerticalPadding);
 }
 
-void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
-                            const QModelIndex& index) const {
+void ConversationDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
+                                 const QModelIndex& index) const {
     const bool selected = option.state & QStyle::State_Selected;
-    const int unread = index.data(model::ChannelModel::UnreadRole).toInt();
+    const int unread = index.data(model::ConversationModel::UnreadRole).toInt();
 
     p->save();
     p->setRenderHint(QPainter::Antialiasing, true);
@@ -51,21 +56,32 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
 
     QRect r = option.rect.adjusted(10, 0, -8, 0);
 
-    // --- type icon, spanning both lines --------------------------------------
-    const auto type = model::channelTypeFromInt(index.data(model::ChannelModel::TypeRole).toInt());
-    const QColor iconColor = selected     ? theme::Text
-                             : unread > 0 ? theme::Accent
-                                          : theme::TextMuted;
-    const qreal dpr = option.widget ? option.widget->devicePixelRatioF() : 1.0;
+    // --- disc, spanning both lines -------------------------------------------
+    const QString name = index.data(model::ConversationModel::NameRole).toString();
+    const auto kind = model::conversationKindFromInt(
+        index.data(model::ConversationModel::KindRole).toInt());
     const int iconSize = theme::scaled(option.font, IconSize);
-    const int glyphInset = theme::scaled(option.font, GlyphInset);
     const QRect iconRect(r.left(), r.top() + (r.height() - iconSize) / 2, iconSize, iconSize);
     p->setPen(Qt::NoPen);
-    p->setBrush(theme::IconBackground);
-    p->drawEllipse(iconRect);
-    const QRect glyphRect =
-        iconRect.adjusted(glyphInset, glyphInset, -glyphInset, -glyphInset);
-    p->drawPixmap(glyphRect, icons::tinted(iconName(type), glyphRect.width(), iconColor, dpr));
+    if (kind == model::ConversationKind::Direct) {
+        // The same monogram this peer is drawn as beside its messages and in
+        // the address book: one person, one disc, wherever they turn up.
+        avatar_.paint(p, iconRect, name);
+    } else {
+        const auto type = model::channelTypeFromInt(
+            index.data(model::ConversationModel::ChannelTypeRole).toInt());
+        const QColor iconColor = selected     ? theme::Text
+                                 : unread > 0 ? theme::Accent
+                                              : theme::TextMuted;
+        const qreal dpr = option.widget ? option.widget->devicePixelRatioF() : 1.0;
+        const int glyphInset = theme::scaled(option.font, GlyphInset);
+        p->setBrush(theme::IconBackground);
+        p->drawEllipse(iconRect);
+        const QRect glyphRect =
+            iconRect.adjusted(glyphInset, glyphInset, -glyphInset, -glyphInset);
+        p->drawPixmap(glyphRect,
+                      icons::tinted(iconName(type), glyphRect.width(), iconColor, dpr));
+    }
     r.setLeft(iconRect.right() + 10);
 
     const QFont nameF = nameFont(option.font);
@@ -85,7 +101,7 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
 
     // --- last message time, right of the name --------------------------------
     const QString stamp =
-        ui::activityStamp(index.data(model::ChannelModel::LastActivityRole).toDateTime());
+        ui::activityStamp(index.data(model::ConversationModel::LastActivityRole).toDateTime());
     if (!stamp.isEmpty()) {
         const int stampWidth = subFm.horizontalAdvance(stamp);
         if (stampWidth + 6 <= topLine.width() - minTextWidth) {
@@ -127,12 +143,11 @@ void ChannelDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
         p->setFont(nameF);
         p->setPen(theme::Text);
         p->drawText(topLine, Qt::AlignLeft | Qt::AlignVCenter,
-                    nameFm.elidedText(index.data(model::ChannelModel::NameRole).toString(),
-                                      Qt::ElideRight, topLine.width()));
+                    nameFm.elidedText(name, Qt::ElideRight, topLine.width()));
     }
 
     // --- newest message ------------------------------------------------------
-    const QString preview = index.data(model::ChannelModel::PreviewRole).toString();
+    const QString preview = index.data(model::ConversationModel::PreviewRole).toString();
     if (!preview.isEmpty() && bottomLine.width() > 0) {
         p->setFont(subF);
         p->setPen(theme::TextMuted);

@@ -781,4 +781,57 @@ void CompanionClient::sendChannelMessage(int channelIndex, const QString& text, 
         [this, token] { Q_EMIT sendResult(token, false, QStringLiteral("connection lost")); });
 }
 
+void CompanionClient::sendDirectMessage(const model::Conversation& conversation,
+                                        const QString& text, int token) {
+    if (state_ != State::Ready) {
+        Q_EMIT sendResult(token, false, QStringLiteral("not connected"));
+        return;
+    }
+    if (!conversation.isDirect() || !conversation.isValid()) {
+        Q_EMIT sendResult(token, false, QStringLiteral("no peer to send to"));
+        return;
+    }
+
+    // Nothing is prepended to a direct message, so unlike a channel send the
+    // budget is a constant -- but it is still a byte count, and going over it
+    // comes back from the node as an unexplained refusal after the text has
+    // been encrypted. Say what is wrong instead.
+    const QByteArray body = text.toUtf8();
+    if (body.size() > MaxDirectTextBytes) {
+        Q_EMIT sendResult(token, false,
+                          QStringLiteral("the message needs %1 bytes and only %2 fit")
+                              .arg(body.size())
+                              .arg(MaxDirectTextBytes));
+        return;
+    }
+
+    // txt_type(1) attempt(1) timestamp(4) pubkey_prefix(6) message. The attempt
+    // counter stays zero: the node runs its own retry ladder and this is always
+    // the app asking once.
+    Writer w(CmdSendTxtMsg);
+    w.u8(TxtPlain)
+        .u8(0)
+        .u32(quint32(QDateTime::currentSecsSinceEpoch()))
+        .padded(conversation.peerPrefix(), model::Conversation::PeerPrefixSize)
+        .tail(body);
+
+    enqueue(
+        w.bytes(),
+        [this, token](quint8 code, Reader& r) {
+            if (code == RespSent) {
+                // SENT carries the ack the node expects back from the peer and
+                // how long it suggests waiting for it. Neither is read yet:
+                // this reports the daemon taking the message, and turning that
+                // into a delivery mark is #3.
+                Q_EMIT sendResult(token, true, {});
+            } else if (code == RespErr) {
+                Q_EMIT sendResult(token, false, errorText(r.u8()));
+            } else {
+                Q_EMIT sendResult(token, false, QStringLiteral("unexpected reply"));
+            }
+            return true;
+        },
+        [this, token] { Q_EMIT sendResult(token, false, QStringLiteral("connection lost")); });
+}
+
 }  // namespace proto

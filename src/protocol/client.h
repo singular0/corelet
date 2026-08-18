@@ -85,6 +85,14 @@ public:
     // than truncated: what a caller is handed back is what it typed.
     void sendChannelMessage(int channelIndex, const QString& text, int token);
 
+    // The same contract for one peer. `conversation` must be a direct one; the
+    // node is addressed by the six-byte key prefix it carries, which is all
+    // CMD_SEND_TXT_MSG takes and so is as good as the whole key. Text longer
+    // than MaxDirectTextBytes is refused through sendResult() rather than
+    // truncated.
+    void sendDirectMessage(const model::Conversation& conversation, const QString& text,
+                           int token);
+
     // Writes a channel into a slot, creating it or replacing what was there.
     // The far end owns the keys, so this is the only way the app can add one.
     // A name over MaxChannelNameBytes is refused through channelSaveResult().

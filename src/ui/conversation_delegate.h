@@ -1,14 +1,21 @@
 #pragma once
 
+#include <QFont>
 #include <QStyledItemDelegate>
 
-// Draws one row of the channel sidebar: a type icon on a round background
-// spanning two lines of text, with the channel name and when it last carried
-// traffic on the first line, and the newest message plus an unread pill on the
-// second.
-class ChannelDelegate : public QStyledItemDelegate {
+#include "ui/avatar.h"
+
+// Draws one row of the conversation sidebar: a disc spanning two lines of text,
+// with the name and when it last carried traffic on the first line, and the
+// newest message plus an unread pill on the second.
+//
+// The disc says what kind of conversation this is without a word: a channel
+// gets the glyph its key kind is drawn as everywhere else, and a peer gets the
+// same monogram the address book and its own messages give it, which is what
+// makes a name recognisable at a glance in a list scanned rather than read.
+class ConversationDelegate : public QStyledItemDelegate {
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    explicit ConversationDelegate(QObject* parent = nullptr);
 
     QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     void paint(QPainter* p, const QStyleOptionViewItem& option,
@@ -23,4 +30,6 @@ private:
     static constexpr int GlyphInset = 7;
     static constexpr int LineGap = 2;
     static constexpr int VerticalPadding = 6;
+
+    Avatar avatar_;
 };

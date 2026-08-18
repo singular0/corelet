@@ -34,6 +34,14 @@ inline constexpr int MaxChannelNameBytes = ChannelNameField;
 inline constexpr int MaxChannelTextBytes = 171;
 inline constexpr int SenderSeparatorBytes = 2;  // the ": " between name and body
 
+// A direct message rides the same 184-byte payload under a different envelope
+// -- a destination hash, a source hash and the MAC rather than a channel hash
+// and the MAC -- but one more header byte still leaves 176 whole AES blocks, so
+// the arithmetic lands on the same 171. What differs is that nothing is
+// prepended: the recipient knows who it is from because only their key opens
+// it, so the whole budget is the body and it does not move with the node's name.
+inline constexpr int MaxDirectTextBytes = MaxChannelTextBytes;
+
 inline int utf8Bytes(const QString& text) { return int(text.toUtf8().size()); }
 
 // Room for the body of a channel message sent under `senderName`. Clamped at

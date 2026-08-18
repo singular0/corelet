@@ -54,6 +54,13 @@ int main() {
                "an implausible name floors at zero rather than going negative"))
         return 1;
 
+    // --- a direct message has no name in front of it ------------------------
+    if (!check(proto::MaxDirectTextBytes == proto::MaxChannelTextBytes,
+               "both kinds ride the same payload") ||
+        !check(proto::MaxDirectTextBytes > proto::maxMessageBytes(QStringLiteral("node")),
+               "a direct message keeps the room a channel spends on the sender's name"))
+        return 1;
+
     // --- a body at exactly the budget fits one payload, and one byte more
     //     does not, for every width of character ----------------------------
     const QString sender = QString::fromUtf8("узел-1");

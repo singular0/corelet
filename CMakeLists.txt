@@ -65,13 +65,13 @@ add_executable(corelet
     src/protocol/client.cpp
     src/model/history.cpp
     src/model/chat_model.cpp
-    src/model/channel_model.cpp
+    src/model/conversation_model.cpp
     src/model/contact_model.cpp
     src/ui/theme.cpp
     src/ui/icons.cpp
     src/ui/avatar.cpp
     src/ui/byte_limit.cpp
-    src/ui/channel_delegate.cpp
+    src/ui/conversation_delegate.cpp
     src/ui/contact_delegate.cpp
     src/ui/message_delegate.cpp
     src/ui/connect_dialog.cpp
@@ -177,6 +177,17 @@ if(BUILD_TESTING)
         target_compile_options(chat-model-test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME chat-model-test COMMAND chat-model-test)
+
+    add_executable(conversation-model-test
+        tests/conversation_model_test.cpp
+        src/model/conversation_model.cpp)
+    target_include_directories(conversation-model-test PRIVATE src)
+    target_link_libraries(conversation-model-test PRIVATE Qt6::Core)
+    target_compile_definitions(conversation-model-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(conversation-model-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME conversation-model-test COMMAND conversation-model-test)
 
     # Header-only rules, so nothing of the app is compiled in beside the test.
     add_executable(text-limits-test tests/text_limits_test.cpp)

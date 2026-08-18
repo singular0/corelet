@@ -21,8 +21,8 @@ class MessageDelegate;
 class NodePane;
 
 namespace model {
-class ChannelModel;
 class ChatModel;
+class ConversationModel;
 }  // namespace model
 
 class MainWindow : public QMainWindow {
@@ -36,7 +36,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private Q_SLOTS:
-    void onChannelSelected(const QModelIndex& current, const QModelIndex& previous);
+    void onConversationSelected(const QModelIndex& current, const QModelIndex& previous);
     void onSendClicked();
 
     void onStateChanged(proto::CompanionClient::State state, const QString& detail);
@@ -55,39 +55,82 @@ private:
     void openConnectDialog();
     // The address book, which lives on the node: nothing to show without a link.
     void showContacts();
-    // The add button's menu: one item per kind of channel, since which kind is
-    // being added is settled before any of them has a field to fill in.
-    void showAddChannelMenu();
+    // The add button's menu: a direct conversation, then one item per kind of
+    // channel, since which kind is being added is settled before any of them
+    // has a field to fill in.
+    void showAddMenu();
     // Writes a channel the menu produced -- from a dialog, or straight from the
     // public channel's constant key -- to the slot it carries.
     void addChannel(const model::Channel& channel);
+    // Picks a peer out of the address book and opens the conversation with
+    // them, which for somebody nobody has spoken to yet is what creates it.
+    void startDirectConversation();
     // Shows the selected channel's key, to pass on to whoever is being invited.
     void shareCurrentChannel();
-    // Asks first: this deletes the key from the device, and a private channel
-    // cannot be got back without a copy of it.
-    void removeCurrentChannel();
-    // Shows a channel list, from the active device or its identity-scoped cache.
+    // Asks first, and what it warns about depends on the kind: removing a
+    // channel deletes its key from the device and a private one cannot be got
+    // back, while a direct conversation is only ever local.
+    void removeCurrentConversation();
+    // Asks before something goes away for good, and says what removing it will
+    // actually cost -- which differs enough between a channel whose key lives
+    // only on the device and a conversation that is only ever local to be worth
+    // spelling out each time.
+    bool confirmRemoval(const QString& title, const QString& name,
+                        const QString& impactItems);
+
+    // --- the sidebar --------------------------------------------------------
+    // Shows a channel list, from the active device or its identity-scoped
+    // cache, and rebuilds the peer rows beside it.
     void showChannels(const QVector<model::Channel>& channels);
     void loadCachedChannels();
     void saveCachedChannels(const QVector<model::Channel>& channels);
-    void selectChannel(int channelIndex);
-    void showChannel(int channelIndex);
-    QByteArray currentChannelKey() const;
+    // The peer rows: everyone this device has stored messages with, plus any
+    // conversation somebody opened and has not spoken in yet, which exists only
+    // in settings.
+    void loadDirectConversations();
+    // Remembers a peer under this device, so an empty conversation survives a
+    // restart and so the sidebar has a name to draw while offline -- the same
+    // reason channel names are cached.
+    void rememberDirectConversation(const model::Conversation& conversation);
+    void forgetDirectConversation(const model::Conversation& conversation);
+    // What to call a peer: what the address book says now, what it said when
+    // this device was last connected, or the key itself when nothing ever has.
+    QString peerName(const model::Conversation& conversation) const;
+    // Fills in each row's newest message, which is what the sidebar draws under
+    // the name.
+    void hydratePreviews();
+    // Puts the selection back on `wanted`, or on the first row when that
+    // conversation is no longer there. Every rebuild of the rows ends here: a
+    // model reset drops the view's current index, and the pane would be left
+    // showing a conversation the list no longer has.
+    // Taken by value: it is normally the open conversation, which this clears.
+    void restoreSelection(model::Conversation wanted);
+    void selectConversation(const model::Conversation& conversation);
+    void showConversation(const model::Conversation& conversation);
+    // The wire slot of the open conversation, or -1 when it is a direct one --
+    // which has no slot, being addressed by key.
+    int currentChannelIndex() const;
     // The selected channel as the device holds it -- with its key, and so with
-    // its real type, which the offline cache cannot give. Empty when nothing is
-    // selected or the link is down, which is also when nothing can be done to it.
+    // its real type, which the offline cache cannot give. Empty when the open
+    // conversation is not a channel or the link is down, which is also when
+    // nothing can be done to it.
     std::optional<model::Channel> currentChannelOnDevice() const;
+    // The conversation the window was last left on, for this device.
+    model::Conversation rememberedConversation() const;
+    void rememberConversation(const model::Conversation& conversation);
+
     void appendToView(const model::Message& msg);
-    // Hands the message box's byte counter the budget the current node leaves
-    // for a message body. Driven by the node name arriving or changing; ordinary
-    // editing needs nothing, the counter follows the field itself.
+    // Hands the message box's byte counter the budget the open conversation
+    // leaves for a message body. Driven by the selection and by the node name
+    // arriving or changing; ordinary editing needs nothing, the counter follows
+    // the field itself.
     void updateMessageBudget();
     void updateInputState();
     void updateReadyStatus();
     // Adding and removing a channel are both writes to the device, so they need
     // a live link -- and a free slot to write into, or a removable channel
-    // selected.
-    void updateChannelActions();
+    // selected. A direct conversation is local either way.
+    void updateConversationActions();
     void updateHeader();
     // A passing word above the message box -- a failed send, a channel being
     // added. It costs no vertical space while there is nothing to say, which is
@@ -117,19 +160,19 @@ private:
     proto::CompanionClient* client_ = nullptr;
     proto::ConnectTarget target_;
     model::History history_;
-    // The MeshCore public key learned from SELF_INFO. No channel or message is
-    // read or written before this is known.
+    // The MeshCore public key learned from SELF_INFO. No conversation or
+    // message is read or written before this is known.
     QByteArray activeDeviceId_;
 
-    model::ChannelModel* channelModel_ = nullptr;
+    model::ConversationModel* conversationModel_ = nullptr;
     model::ChatModel* chatModel_ = nullptr;
     MessageDelegate* messageDelegate_ = nullptr;
 
     QSplitter* splitter_ = nullptr;
-    QListView* channelList_ = nullptr;
-    QToolButton* addChannelButton_ = nullptr;
+    QListView* conversationList_ = nullptr;
+    QToolButton* addButton_ = nullptr;
     QToolButton* shareChannelButton_ = nullptr;
-    QToolButton* removeChannelButton_ = nullptr;
+    QToolButton* removeButton_ = nullptr;
     // Foot of the sidebar: the node, the link, and the way to the connect
     // dialog. There is no status bar and no menu bar to put any of that in.
     NodePane* nodePane_ = nullptr;
@@ -138,7 +181,7 @@ private:
     QLineEdit* input_ = nullptr;
     QAction* sendAction_ = nullptr;
     // Caps the message box in encoded bytes. Held on to because the budget moves
-    // with the node's name.
+    // with the open conversation and with the node's name.
     ByteLimit* messageLimit_ = nullptr;
     ElidedLabel* notice_ = nullptr;
     QTimer* noticeTimer_ = nullptr;
@@ -151,10 +194,10 @@ private:
     bool contactsSyncing_ = false;
     bool messagesSyncing_ = false;
 
-    // Current daemon slot number of the open conversation, or -1 for none. It
-    // is only a wire address; persistent selection follows the channel key.
-    int currentChannel_ = -1;
-    int directMessageCount_ = 0;
+    // The open conversation, or an invalid one when nothing is selected. This
+    // is an identity rather than a wire address: a channel that moves slot
+    // stays open, and a peer has no slot at all.
+    model::Conversation current_;
 
     // Sends the daemon has not answered yet, by the tag the app gave them. They
     // are on screen but not in history: a message is written down only once it
@@ -162,11 +205,11 @@ private:
     struct PendingSend {
         model::Message message;
         QByteArray deviceId;
-        QByteArray channelKey;
+        model::Conversation conversation;
     };
     QHash<int, PendingSend> pendingSends_;
     // clearChannel() removes the channel from the client's list before its
     // result reaches the window, so retain the key-derived identity here.
-    QHash<int, QByteArray> pendingChannelRemovals_;
+    QHash<int, model::Conversation> pendingChannelRemovals_;
     int lastSendToken_ = 0;
 };

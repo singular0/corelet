@@ -4,6 +4,7 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QPainter>
+#include <QStyle>
 #include <QWidget>
 
 #include "model/contact_model.h"
@@ -64,6 +65,16 @@ void ContactDelegate::paint(QPainter* p, const QStyleOptionViewItem& option,
                             const QModelIndex& index) const {
     p->save();
     p->setRenderHint(QPainter::Antialiasing, true);
+
+    // Only ever true when this list is being asked to choose somebody, which is
+    // the one time a contact row means anything to click. Drawn exactly as the
+    // sidebar draws its selection so picking a person and opening a
+    // conversation with one look like the same act.
+    if (option.state & QStyle::State_Selected) {
+        p->fillRect(option.rect, theme::SidebarSelected);
+        p->fillRect(QRect(option.rect.left(), option.rect.top(), 2, option.rect.height()),
+                    theme::Accent);
+    }
 
     QRect r = option.rect.adjusted(10, 0, -10, 0);
 

@@ -9,10 +9,13 @@ each other.
 
 ## Build
 
-Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are two CTest binaries
-built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`) plus
+Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are four CTest binaries
+built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`,
+`tests/conversation_model_test.cpp`, `tests/text_limits_test.cpp`) plus
 `tests/version_test.cmake`, which drives the version resolver over throwaway repositories rather
-than compiling anything; run them with `ctest --test-dir build`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
+than compiling anything; run them with `ctest --test-dir build`. They link only what they exercise
+and never Qt6::Test — nothing here needs a test framework, and adding one would put a dependency in
+`debian/control` for the sake of `QSignalSpy`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
 the history test opens a real QSQLITE database and `dh_auto_test` fails without the driver plugin.
 
 ```sh
@@ -168,11 +171,12 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
 
 - **`protocol/`** — wire constants, frame codec, transports, and `CompanionClient`, the state
   machine that owns the link.
-- **`model/`** — `Channel`/`Contact`/`Message` value types, the SQLite `History`, and three
-  `QAbstractListModel`s (`ChannelModel` for the sidebar, `ChatModel` for the open conversation,
-  `ContactModel` for the address book).
+- **`model/`** — `Channel`/`Contact`/`Conversation`/`Message` value types, the SQLite `History`,
+  and three `QAbstractListModel`s (`ConversationModel` for the sidebar, `ChatModel` for the open
+  conversation, `ContactModel` for the address book).
 - **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, `NodePane`, the
-  add/share channel and contacts dialogs, three item delegates, the dark `theme`, and SVG icons in
+  add/share channel and contacts dialogs (the last doubling as the peer picker for a new direct
+  conversation, so the two never drift), three item delegates, the dark `theme`, and SVG icons in
   a `.qrc` (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
   `debian/copyright`, which are what the README's license section points at). Anything two lists
   have to say the same way is shared rather than copied: `row_format.h` for a last-heard stamp and
@@ -191,8 +195,7 @@ Violating any of these produces bugs that only show up against a real device:
 - **Pushes (code `>= 0x80`) are interleaved** with replies and are routed in `handlePush` before the
   queue is consulted. `PUSH_MSG_WAITING` is what triggers message collection.
 - **`SYNC_NEXT_MESSAGE` pops** from the daemon's inbox. The daemon is not storage; whatever the app
-  collects it must persist to the device database or the message is gone. This includes direct messages,
-  which have no view yet but are stored under the conversation with their peer. Because the pop is destructive, the
+  collects it must persist to the device database or the message is gone. Because the pop is destructive, the
   drain is gated on storage: `CompanionClient::setStorageAvailable` must be true before the first
   sync, `MainWindow::preflightStorage` sets it from a real open of the device database on
   `deviceInfoChanged`, and any `History` failure turns it back off. Both message signals are
@@ -219,13 +222,19 @@ Violating any of these produces bugs that only show up against a real device:
   from the 184-byte mesh payload: a channel name is 32 encoded bytes, and a message body is what the
   184 leaves once the envelope, the 5-byte text header and the node's own `"Name: "` prefix are
   taken — which is why the budget depends on the name `SELF_INFO` reported and cannot be a constant.
+  A direct message rides a bigger envelope but the AES block rounding lands on the same 171, and
+  nothing is prepended to it — only the recipient's key opens it, so who it is from is not in
+  question — which makes `MaxDirectTextBytes` a constant where the channel budget is not.
   A Cyrillic letter costs two bytes and an emoji four, so a `QString` character count over-promises
   by up to four times, and the send comes back from the node as an unexplained `NOT_FOUND`.
   `CompanionClient` refuses an over-long name or body rather than letting `Writer::padded` cut one
   through the middle of a character; the UI reads the same rules, and neither end truncates what
   somebody typed.
 - **Our own sends never come back over the air** — they are echoed locally in
-  `MainWindow::onSendResult` when the daemon acknowledges.
+  `MainWindow::onSendResult` when the daemon acknowledges. A channel send is answered `RESP_OK`
+  because there is no addressee to ack; a direct one is answered `RESP_SENT` with the ack the node
+  expects and a suggested timeout. Neither is read yet, so a direct message's tick means the daemon
+  took it and not that it arrived — that is #3.
 - **Only framing differs between links.** `Transport` hides it: the two stream links length-prefix
   and de-frame incrementally, BLE is one Nordic UART write/notification per frame. Everything above
   `Transport` is link-agnostic; don't add transport branches to `CompanionClient`.
@@ -282,9 +291,13 @@ Violating any of these produces bugs that only show up against a real device:
   yet. A direct message needs none of this — its peer prefix is already an identity to file it
   under, however little of one.
 - `QSettings` (org `singular0`, app `corelet`) holds global `geometry`, `splitter` and the
-  `connection/*` target. Device content lives below `devices/<public-key>/`; channel cache entries
-  below that are keyed by channel-key fingerprint and the selected channel is stored by the same
-  fingerprint. The secret channel keys stay in the daemon.
+  `connection/*` target. Device content lives below `devices/<public-key>/`: `channels/` keyed by
+  channel-key fingerprint, `directs/` keyed by peer key, and `selectedConversation/` as a kind and
+  an id (falling back to the older `selectedChannel`, which was a fingerprint and nothing else).
+  The secret channel keys stay in the daemon. A `directs/` entry holds only a name, as a fallback
+  for when the address book cannot be reached — but it is also what holds a conversation somebody
+  opened and has not spoken in yet, since nothing on the node enumerates those and history has
+  nothing to list.
 
 ## Git
 
@@ -329,7 +342,7 @@ worth doing that is outside the current task, open an issue rather than widening
 The uConsole panel is 1280x480 — wide and very short. The chat is a `QListView` with a custom
 delegate specifically so only visible rows lay out and paint; a `QTextBrowser` of HTML would
 re-layout the whole conversation per message, which is visible on a CM4. Keep per-paint work out of
-delegates (e.g. `ChannelModel` pre-flattens the sidebar preview string). Vertical space is the
+delegates (e.g. `ConversationModel` pre-flattens the sidebar preview string). Vertical space is the
 scarce resource: padding is deliberately tighter than desktop defaults, and a sidebar row is two
 tight lines rather than the three a desktop client would spend.
 
@@ -339,11 +352,23 @@ tight lines rather than the three a desktop client would spend.
   bottom** (`MainWindow::appendToView`) — yanking the view while the user reads back is worse than
   a missed jump. An accent divider marks the first unseen message when returning to a channel or
   when traffic arrives while the view is scrolled back.
-- A sidebar row is a channel-type icon plus two lines: the name, then the newest message with its
-  stamp and an unread pill. `ChannelDelegate::activityStamp` gives the clock time alone for
-  anything inside 24 hours and prepends `d MMM` beyond that — a channel list is scanned rather
-  than read, and a bare time on a week-old row means nothing. Mesh timestamps can sit slightly in
-  the future when a sender's clock runs fast, which still counts as just now.
+- A sidebar row is a disc plus two lines: the name, then the newest message with its stamp and an
+  unread pill. The disc is the channel-type icon for a channel and the peer's `Avatar` monogram for
+  a direct conversation — the same disc that peer gets in the address book and beside its own
+  messages, which is what makes a name recognisable without reading it. `ui::activityStamp` gives
+  the clock time alone for anything inside 24 hours and prepends `d MMM` beyond that — a
+  conversation list is scanned rather than read, and a bare time on a week-old row means nothing.
+  Mesh timestamps can sit slightly in the future when a sender's clock runs fast, which still
+  counts as just now.
+- Channels come first in the sidebar, in slot order; direct conversations follow, by name. Not by
+  recency: a list that reorders itself under the pointer is worse to use than one that is a row out
+  of date, and the uConsole's input is a trackball. For the same reason a new peer is a row insert
+  rather than a reset — a reset drops both the reader's scroll position and the selection.
+- Nothing on the node enumerates direct conversations. One exists because something was said in it
+  (`History::directConversations`) or because somebody opened it and has not spoken yet, which
+  lives only in `QSettings`. Removing one is therefore purely local, needs no link, and warns about
+  something quite different from removing a channel — hence `MainWindow::confirmRemoval` taking the
+  impact list rather than owning it.
 - Every field with a byte budget carries a `ByteLimit` (`ui/byte_limit.h`), which is what
   `QLineEdit::setMaxLength` would be if it counted encoded bytes instead of characters — the whole
   reason it exists, since the same 32-byte field holds 32 Latin letters, 16 Cyrillic ones or 8
