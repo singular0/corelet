@@ -215,9 +215,10 @@ inline size_t qHash(const Conversation& conversation, size_t seed = 0) {
 
 struct Message {
     // How far one of our own sends has got. Meaningless for incoming messages,
-    // and for anything read back from history: the app writes a message down
-    // only once the daemon has taken it, and how it fared afterwards is not
-    // stored, so a message from history is always Sent.
+    // which is what a stored row says about one by holding nothing at all.
+    // Stored otherwise, so what the mark says outlives the session that sent
+    // the message -- except for Pending, which never reaches storage: a message
+    // is written down only once the daemon has taken it.
     enum class SendState {
         Sent,     // the daemon acknowledged the command
         Pending,  // shown optimistically, still waiting for that answer
@@ -248,7 +249,8 @@ struct Message {
     SendState sendState = SendState::Sent;
     // Ties the row on screen to the answer that will settle it. The protocol
     // tags nothing, so the app supplies its own tag; it lives only while the
-    // send is in flight and is never persisted.
+    // send is in flight and is never persisted -- what a later session finds
+    // the row by is where it is stored, not the tag it was sent under.
     int sendToken = 0;
     // Radio quality of the packet that carried it. Meaningless for our own
     // messages, so `hasSignal` gates display rather than a sentinel value.
@@ -259,6 +261,19 @@ struct Message {
 
     bool flooded() const { return pathLen == 0xFF; }
 };
+
+// A stored column, which this end does not control any more than it controls a
+// wire byte. Absent for an incoming message and for every row written before
+// history recorded this at all, and both of those read back the way they always
+// have: the daemon took it and nothing further is known. Pending is not a state
+// storage can hold, so an int claiming it says no more than that either.
+inline Message::SendState sendStateFromInt(int value) {
+    switch (value) {
+        case int(Message::SendState::Delivered): return Message::SendState::Delivered;
+        case int(Message::SendState::Unconfirmed): return Message::SendState::Unconfirmed;
+        default: return Message::SendState::Sent;
+    }
+}
 
 }  // namespace model
 

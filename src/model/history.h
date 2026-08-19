@@ -59,7 +59,7 @@ public:
     // own in `PRAGMA user_version`: an older one is stepped up to this on open,
     // and a newer one is refused rather than guessed at, because the only thing
     // a database from a future build can be is somebody's message history.
-    static constexpr int SchemaVersion = 2;
+    static constexpr int SchemaVersion = 3;
 
     explicit History(QString directory);
     ~History();
@@ -80,8 +80,23 @@ public:
                              int channelIndex = -1) const;
     HistoryLatest latestMessage(const QByteArray& deviceId, const Conversation& conversation,
                                 int channelIndex = -1) const;
+    // `rowId` comes back with the row the message landed in, and only when the
+    // append committed. It is the one durable handle on a message: how a direct
+    // send fared arrives seconds to a minute after it was written down, by which
+    // time the per-session tag it was sent under means nothing.
     HistoryResult append(const QByteArray& deviceId, const Conversation& conversation,
-                         const Message& msg);
+                         const Message& msg, qint64* rowId = nullptr);
+    // Records how one of our own sends ended up, on a row `append` already
+    // wrote. Kept apart from the append because the answer is not in hand at
+    // insert time: the daemon taking a message is what makes it worth storing,
+    // and the peer confirming it -- or the wait for that running out -- is a
+    // separate event entirely.
+    //
+    // A row that is no longer there is a success: retention trims the oldest
+    // messages, and a send outliving its own row is not storage refusing to
+    // work.
+    HistoryResult settleSend(const QByteArray& deviceId, qint64 rowId,
+                             Message::SendState state);
     // Forgets one conversation in one device database. Device identity and the
     // conversation are the complete scope; a reused channel slot cannot inherit
     // another channel's messages.
@@ -124,10 +139,13 @@ private:
     // discards the connection on a failure, since a half-migrated database is
     // not one to keep writing messages into.
     static QString migrate(QSqlDatabase& db);
-    // The one 1 -> 2 step, in C++ rather than SQL because the direct messages
-    // of a version 1 database carry their peer as hex in the sender column and
+    // The 1 -> 2 step, in C++ rather than SQL because the direct messages of a
+    // version 1 database carry their peer as hex in the sender column and
     // SQLite has no portable way to decode it.
     static QString upgradeToConversations(QSqlDatabase& db);
+    // The 2 -> 3 step: the column that carries how a send fared past the
+    // session that sent it.
+    static QString upgradeToSendState(QSqlDatabase& db);
 
     QString directory_;
     // Connections are lazy: devices untouched in this process cost no file

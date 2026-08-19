@@ -34,7 +34,22 @@ Message storedMessage(const QSqlQuery& query, const Conversation& conversation,
         msg.snr = query.value(4).toFloat();
         msg.pathLen = query.value(5).toInt();
     }
+    // Nothing recorded is what an incoming message stores and what every row
+    // written before version 3 holds, and both mean the same as they always
+    // did: the daemon took it, and nothing beyond that is known here.
+    if (!query.value(6).isNull()) msg.sendState = sendStateFromInt(query.value(6).toInt());
     return msg;
+}
+
+// What a row records about how far one of our own sends got. Nothing for an
+// incoming message: the field is meaningless for one, and leaving it out is
+// also what makes an older build's rows read back correctly. A send still in
+// flight cannot be stored -- a message is written down only once the daemon has
+// taken it -- so nothing on disk ever claims a wait that nobody is holding.
+QVariant sendStateColumn(const Message& msg) {
+    if (!msg.outgoing) return {};
+    return int(msg.sendState == Message::SendState::Pending ? Message::SendState::Sent
+                                                            : msg.sendState);
 }
 
 // The two columns that together are one conversation, bound in the order every
@@ -44,7 +59,8 @@ void bindConversation(QSqlQuery& query, const Conversation& conversation) {
     query.addBindValue(conversation.id);
 }
 
-constexpr auto SelectColumns = "timestamp, text, sender, outgoing, snr, path_len";
+constexpr auto SelectColumns =
+    "timestamp, text, sender, outgoing, snr, path_len, send_state";
 
 }  // namespace
 
@@ -137,7 +153,10 @@ HistoryLatest History::latestMessage(const QByteArray& deviceId,
 }
 
 HistoryResult History::append(const QByteArray& deviceId, const Conversation& conversation,
-                              const Message& msg) {
+                              const Message& msg, qint64* rowId) {
+    // Nothing is stored yet, and a caller holding a row number from an append
+    // that failed would settle a send onto somebody else's message.
+    if (rowId) *rowId = 0;
     if (deviceId.size() != DeviceIdSize || !conversation.isValid())
         return HistoryResult::failure(QStringLiteral("the conversation has no identity"));
 
@@ -149,8 +168,9 @@ HistoryResult History::append(const QByteArray& deviceId, const Conversation& co
     QSqlQuery insert(db);
     if (!insert.prepare(QStringLiteral(
             "INSERT INTO messages "
-            "(conv_kind, conv_id, timestamp, text, sender, outgoing, snr, path_len) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"))) {
+            "(conv_kind, conv_id, timestamp, text, sender, outgoing, snr, path_len, "
+            "send_state) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"))) {
         const QString reason = sqlError(insert.lastError());
         db.rollback();
         return HistoryResult::failure(reason);
@@ -162,11 +182,15 @@ HistoryResult History::append(const QByteArray& deviceId, const Conversation& co
     insert.addBindValue(msg.outgoing);
     insert.addBindValue(msg.hasSignal ? QVariant(double(msg.snr)) : QVariant());
     insert.addBindValue(msg.hasSignal ? QVariant(msg.pathLen) : QVariant());
+    insert.addBindValue(sendStateColumn(msg));
     if (!insert.exec()) {
         const QString reason = sqlError(insert.lastError());
         db.rollback();
         return HistoryResult::failure(reason);
     }
+    // Read here rather than after the commit, which is one more statement away
+    // and leaves the driver with a different query's id to hand back.
+    const QVariant inserted = insert.lastInsertId();
 
     // The conversation/id index finds the retention boundary without scanning
     // any other conversation or rewriting the database.
@@ -193,6 +217,39 @@ HistoryResult History::append(const QByteArray& deviceId, const Conversation& co
         db.rollback();
         return HistoryResult::failure(reason);
     }
+    if (rowId) *rowId = inserted.toLongLong();
+    return HistoryResult::success();
+}
+
+HistoryResult History::settleSend(const QByteArray& deviceId, qint64 rowId,
+                                  Message::SendState state) {
+    if (deviceId.size() != DeviceIdSize || rowId <= 0)
+        return HistoryResult::failure(QStringLiteral("there is no stored message to settle"));
+    // Storage holds what a send came to, never a wait still in progress. Writing
+    // one down would leave a row a later session can only draw as waiting on an
+    // answer nothing is listening for.
+    if (state == Message::SendState::Pending)
+        return HistoryResult::failure(QStringLiteral("a send in flight is not a stored state"));
+
+    QString error;
+    const QSqlDatabase db = databaseFor(deviceId, &error);
+    if (!db.isOpen()) return HistoryResult::failure(error);
+
+    QSqlQuery query(db);
+    // The row number is the whole address: by the time an ack arrives the
+    // conversation may have been reloaded, and neither the on-screen row nor the
+    // tag it was drawn under is anything storage ever knew about. `outgoing`
+    // is belt and braces -- how a send fared is not something to write onto a
+    // message somebody else sent us.
+    if (!query.prepare(QStringLiteral(
+            "UPDATE messages SET send_state = ? WHERE id = ? AND outgoing = 1")))
+        return HistoryResult::failure(sqlError(query.lastError()));
+    query.addBindValue(int(state));
+    query.addBindValue(rowId);
+    if (!query.exec()) return HistoryResult::failure(sqlError(query.lastError()));
+    // Matching no row is a success: retention drops the oldest messages, and a
+    // conversation busy enough to trim one out from under its own ack is not
+    // storage refusing to work.
     return HistoryResult::success();
 }
 
@@ -364,8 +421,13 @@ QString History::migrate(QSqlDatabase& db) {
         // that records them, so a database is either wholly at the version it
         // claims or wholly back where it started. Version 0 is a database with
         // nothing in it yet, which the current DDL below builds directly.
+        //
+        // Every step is guarded by the versions it applies to rather than by
+        // "older than current", so a version 1 database takes both of them in
+        // order and adding a fourth version does not silently re-run either.
         if (!db.transaction()) return sqlError(db.lastError());
-        if (found >= 1) error = upgradeToConversations(db);
+        if (found == 1) error = upgradeToConversations(db);
+        if (error.isEmpty() && found >= 1 && found < 3) error = upgradeToSendState(db);
         step(QStringLiteral("PRAGMA user_version = %1").arg(SchemaVersion));
         if (!error.isEmpty()) {
             db.rollback();
@@ -395,7 +457,11 @@ QString History::migrate(QSqlDatabase& db) {
                         "sender TEXT NOT NULL DEFAULT '', "
                         "outgoing INTEGER NOT NULL DEFAULT 0, "
                         "snr REAL, "
-                        "path_len INTEGER)"));
+                        "path_len INTEGER, "
+                        // model::Message::SendState, and only for one of our own
+                        // sends: how far a message got is meaningless for one
+                        // that arrived, so an incoming row leaves it null.
+                        "send_state INTEGER)"));
     step(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_by_conversation "
                         "ON messages(conv_kind, conv_id, id)"));
     // Written back even when it is already this, because it is the one *write*
@@ -490,6 +556,27 @@ QString History::upgradeToConversations(QSqlDatabase& db) {
 
     step(QStringLiteral("DROP TABLE messages_v1"));
     return error;
+}
+
+QString History::upgradeToSendState(QSqlDatabase& db) {
+    QSqlQuery query(db);
+    // A database left holding a version but no table -- an open that failed
+    // between recording the one and creating the other -- has nothing to alter,
+    // and the current DDL builds it with the column already in place.
+    if (!query.exec(QStringLiteral("SELECT 1 FROM sqlite_master "
+                                   "WHERE type = 'table' AND name = 'messages'")))
+        return sqlError(query.lastError());
+    const bool present = query.next();
+    query.finish();
+    if (!present) return {};
+
+    // Nothing is backfilled. A row written before this column says nothing about
+    // how its send fared, and null is exactly that -- the same thing an incoming
+    // message stores, and what reads back as the plain Sent every stored message
+    // used to be.
+    if (!query.exec(QStringLiteral("ALTER TABLE messages ADD COLUMN send_state INTEGER")))
+        return sqlError(query.lastError());
+    return {};
 }
 
 }  // namespace model

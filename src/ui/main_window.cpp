@@ -1303,17 +1303,22 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
 
     // Only now is it worth writing down. History is what the app has instead of
     // the daemon's inbox, and a message that never left has no business in it.
-    // What follows the daemon taking it is not stored: a direct message's
-    // delivery is settled within the session that sent it or not at all.
     msg.sendState = model::Message::SendState::Sent;
     // A direct send is not finished by the daemon taking it, so the row keeps
     // the tag the peer's answer will find it by. A channel send has none coming.
     msg.sendToken = pending.conversation.isDirect() ? token : 0;
+    qint64 rowId = 0;
     const model::HistoryResult stored =
-        history_.append(pending.deviceId, pending.conversation, msg);
+        history_.append(pending.deviceId, pending.conversation, msg, &rowId);
     // The message did go out, so it stays on screen; what it says about storage
     // is the same as any other failed write, and collection stops on it.
     if (!stored) onStorageFailure(QStringLiteral("save a sent message"), stored);
+    // Hold on to the row a direct send landed in: what the peer answers, or the
+    // wait running out, has to reach the database as well as the row on screen,
+    // or the mark would go back to a bare tick the next time the conversation is
+    // opened.
+    if (stored && pending.conversation.isDirect())
+        openSends_.insert(token, {pending.deviceId, rowId});
 
     const bool stillShowingDevice = pending.deviceId == activeDeviceId_;
     if (stillShowingDevice) conversationModel_->setLastMessage(pending.conversation, msg);
@@ -1326,16 +1331,36 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
 }
 
 // The peer answered for a direct message, or the wait for that answer ran out.
-// Both are the mark on one row and nothing more: a notice per unacknowledged
-// message would be constant noise on a mesh where a flood round trip routinely
-// takes half a minute, and the row a reload replaced is not one to hunt down --
-// history has the message, and it never claimed to be confirmed.
+// Neither is worth a word on screen beyond the mark on the row: a notice per
+// unacknowledged message would be constant noise on a mesh where a flood round
+// trip routinely takes half a minute. The row a reload replaced is not hunted
+// down either -- it is the stored message that has to be right, and reopening
+// the conversation is what draws it.
 void MainWindow::onSendConfirmed(int token) {
     chatModel_->setSendState(token, model::Message::SendState::Delivered);
+    settleStoredSend(token, model::Message::SendState::Delivered);
 }
 
 void MainWindow::onSendUnconfirmed(int token) {
     chatModel_->setSendState(token, model::Message::SendState::Unconfirmed);
+    settleStoredSend(token, model::Message::SendState::Unconfirmed);
+}
+
+// Writes down what a direct send came to. A failure here costs only a mark, but
+// it is still a write the database refused, which is the same news for every
+// message waiting in the daemon's inbox -- so it stops collection like any other.
+void MainWindow::settleStoredSend(int token, model::Message::SendState state) {
+    const auto it = openSends_.constFind(token);
+    if (it == openSends_.constEnd()) return;
+    const OpenSend open = *it;
+    // The row is let go of only once nothing can answer for it any more, which
+    // is the same rule the row on screen follows: a peer's confirmation is the
+    // end of a send, while a lapsed window is not -- the node goes on retrying
+    // afterwards, and a late ack belongs on disk as much as on the row.
+    if (state == model::Message::SendState::Delivered) openSends_.erase(it);
+
+    const model::HistoryResult recorded = history_.settleSend(open.deviceId, open.rowId, state);
+    if (!recorded) onStorageFailure(QStringLiteral("record how a send fared"), recorded);
 }
 
 // The node prepends its own name to every channel message it sends, so what is
@@ -1428,6 +1453,11 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
         storagePreflighted_ = false;
         contactsSyncing_ = false;
         messagesSyncing_ = false;
+        // The client has just abandoned the acks it was waiting on, and a push
+        // cannot reach a link that is down: nothing further can be recorded
+        // about these sends, whatever the next session turns out to be talking
+        // to. Their rows keep whatever was written before the link went.
+        openSends_.clear();
     }
 
     QString label;

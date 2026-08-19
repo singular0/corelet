@@ -158,6 +158,9 @@ private:
     // taken the message off the node -- so it stops the drain as well as
     // saying so. `action` completes "Could not ...".
     void onStorageFailure(const QString& action, const model::HistoryResult& result);
+    // Records how a direct send ended up on the row it was written to, and lets
+    // go of that row once nothing can answer for it any more.
+    void settleStoredSend(int token, model::Message::SendState state);
 
     proto::CompanionClient* client_ = nullptr;
     proto::ConnectTarget target_;
@@ -210,6 +213,20 @@ private:
         model::Conversation conversation;
     };
     QHash<int, PendingSend> pendingSends_;
+    // Direct sends the daemon has taken and the peer has not confirmed, by the
+    // same tag: the device database and the row each message was written to, so
+    // an answer arriving a minute later can be recorded rather than only drawn.
+    // The row number is what survives -- the tag means nothing next session, and
+    // the on-screen row may have been replaced by a reload.
+    //
+    // Emptied when the link leaves Ready, which is exactly when the client
+    // abandons the acks it was waiting on: nothing can answer for these
+    // afterwards, since a push cannot reach a session that is gone.
+    struct OpenSend {
+        QByteArray deviceId;
+        qint64 rowId = 0;
+    };
+    QHash<int, OpenSend> openSends_;
     // clearChannel() removes the channel from the client's list before its
     // result reaches the window, so retain the key-derived identity here.
     QHash<int, model::Conversation> pendingChannelRemovals_;

@@ -246,6 +246,71 @@ int main(int argc, char* argv[]) {
             return 1;
     }
 
+    // How far one of our own sends got outlives the session that sent it. Nothing
+    // can settle a stored send later on, so the row number an append hands back
+    // is the only thing an answer arriving a minute afterwards can find it by.
+    {
+        using SendState = model::Message::SendState;
+        const QByteArray deviceD(32, '\x88');
+        model::History history(directory.path());
+
+        model::Message sent = message(-1, 20);
+        sent.outgoing = true;
+        sent.sendState = SendState::Pending;
+        qint64 sentRow = 0;
+        model::Message arrived = message(-1, 21);
+        arrived.outgoing = false;
+        qint64 arrivedRow = 0;
+        if (!check(bool(history.append(deviceD, peer, sent, &sentRow)) && sentRow > 0,
+                   "an append hands back the row it wrote") ||
+            !check(bool(history.append(deviceD, peer, arrived, &arrivedRow)) &&
+                       arrivedRow != sentRow,
+                   "each message gets its own row"))
+            return 1;
+
+        const auto storedState = [&](int row) {
+            return history.messages(deviceD, peer).messages.at(row).sendState;
+        };
+        // A send in flight is not a state storage can hold: the message is
+        // written down only once the daemon has taken it, so that is what a row
+        // says about one however it was handed over.
+        if (!check(storedState(0) == SendState::Sent,
+                   "a stored send reads back as taken by the daemon") ||
+            !check(bool(history.settleSend(deviceD, sentRow, SendState::Delivered)),
+                   "settling a stored send succeeds") ||
+            !check(storedState(0) == SendState::Delivered,
+                   "a peer's confirmation survives the session that heard it") ||
+            !check(bool(history.settleSend(deviceD, sentRow, SendState::Unconfirmed)),
+                   "a later answer replaces the one recorded") ||
+            !check(storedState(0) == SendState::Unconfirmed,
+                   "a wait that ran out is remembered as one") ||
+            !check(storedState(1) == SendState::Sent,
+                   "nothing is claimed about how a message that arrived was sent"))
+            return 1;
+
+        const model::HistoryLatest newest = history.latestMessage(deviceD, peer);
+        const model::HistoryResult ownRowOnly =
+            history.settleSend(deviceD, arrivedRow, SendState::Delivered);
+        if (!check(bool(newest.result) && newest.message &&
+                       newest.message->sendState == SendState::Sent,
+                   "the sidebar's newest-message lookup reads the same column") ||
+            !check(bool(ownRowOnly) && storedState(1) == SendState::Sent,
+                   "a message somebody else sent us cannot be marked delivered") ||
+            !check(bool(history.settleSend(deviceD, arrivedRow + 1000, SendState::Delivered)),
+                   "a row retention has already dropped is not a storage failure") ||
+            !check(!history.settleSend(deviceD, sentRow, SendState::Pending),
+                   "a send still in flight is refused rather than written down") ||
+            !check(!history.settleSend(deviceD, 0, SendState::Delivered),
+                   "there is no row nought to settle"))
+            return 1;
+
+        model::History reopened(directory.path());
+        if (!check(reopened.messages(deviceD, peer).messages.at(0).sendState ==
+                       SendState::Unconfirmed,
+                   "the mark is read back rather than reset on reload"))
+            return 1;
+    }
+
     // A version 1 database -- one nullable channel column, every direct message
     // from every peer sharing one conversation and identified by the hex of the
     // prefix in its sender column -- is stepped up rather than abandoned.
@@ -324,6 +389,93 @@ int main(int argc, char* argv[]) {
         model::History reopened(directory.path());
         if (!check(reopened.messages(legacy, peer).messages.size() == 1,
                    "the upgrade is recorded and not repeated"))
+            return 1;
+    }
+
+    // A version 2 database -- conversations already, but nothing written down
+    // about how a send fared -- gains the column and keeps every row it had.
+    {
+        using SendState = model::Message::SendState;
+        const QByteArray legacy(32, '\xa1');
+        const QString path = databasePath(directory, legacy);
+        if (!check(runSql(path,
+                          {QStringLiteral("PRAGMA user_version = 2"),
+                           QStringLiteral("CREATE TABLE messages (id INTEGER PRIMARY KEY, "
+                                          "conv_kind INTEGER NOT NULL, conv_id BLOB NOT NULL, "
+                                          "timestamp INTEGER NOT NULL, text TEXT NOT NULL, "
+                                          "sender TEXT NOT NULL DEFAULT '', "
+                                          "outgoing INTEGER NOT NULL DEFAULT 0, snr REAL, "
+                                          "path_len INTEGER)"),
+                           QStringLiteral("CREATE INDEX messages_by_conversation "
+                                          "ON messages(conv_kind, conv_id, id)"),
+                           QStringLiteral("INSERT INTO messages "
+                                          "(conv_kind, conv_id, timestamp, text, sender, "
+                                          "outgoing) VALUES (%1, x'%2', 1700000010, "
+                                          "'sent before there was a column', '', 1)")
+                               .arg(int(model::ConversationKind::Direct))
+                               .arg(QString::fromLatin1(peerKey.toHex()))}),
+                   "a version 2 database can be planted"))
+            return 1;
+
+        model::History history(directory.path());
+        const model::HistoryMessages carried = history.messages(legacy, peer);
+        if (!check(bool(carried.result) && carried.messages.size() == 1,
+                   "a version 2 message survives the upgrade") ||
+            !check(carried.messages.at(0).text ==
+                       QStringLiteral("sent before there was a column"),
+                   "the upgraded message keeps its text") ||
+            !check(carried.messages.at(0).sendState == SendState::Sent,
+                   "a send stored before the column reads as taken by the daemon"))
+            return 1;
+
+        // And the column the step added is one this build can write to.
+        model::Message sent = message(-1, 30);
+        sent.outgoing = true;
+        qint64 rowId = 0;
+        if (!check(bool(history.append(legacy, peer, sent, &rowId)),
+                   "the upgraded database takes a new message") ||
+            !check(bool(history.settleSend(legacy, rowId, SendState::Delivered)),
+                   "the added column can be settled onto") ||
+            !check(history.messages(legacy, peer).messages.at(1).sendState ==
+                       SendState::Delivered,
+                   "and it reads back"))
+            return 1;
+
+        // A version 1 database takes both steps, which is the only path where the
+        // column is added to a table another step has just built.
+        const QByteArray older(32, '\xa2');
+        if (!check(runSql(databasePath(directory, older),
+                          {QStringLiteral("PRAGMA user_version = 1"),
+                           QStringLiteral("CREATE TABLE messages (id INTEGER PRIMARY KEY, "
+                                          "channel BLOB, timestamp INTEGER NOT NULL, "
+                                          "text TEXT NOT NULL, sender TEXT NOT NULL DEFAULT '', "
+                                          "outgoing INTEGER NOT NULL DEFAULT 0, snr REAL, "
+                                          "path_len INTEGER)")}),
+                   "a version 1 database can be planted alongside"))
+            return 1;
+
+        qint64 twiceUpgraded = 0;
+        if (!check(bool(history.append(older, peer, sent, &twiceUpgraded)),
+                   "a database stepped up twice takes a message") ||
+            !check(bool(history.settleSend(older, twiceUpgraded, SendState::Unconfirmed)) &&
+                       history.messages(older, peer).messages.at(0).sendState ==
+                           SendState::Unconfirmed,
+                   "both steps ran, in order"))
+            return 1;
+
+        // A version 2 database that holds a version and no table has nothing for
+        // the step to alter, and the current DDL builds it with the column in it.
+        const QByteArray halfBuilt(32, '\xa3');
+        if (!check(runSql(databasePath(directory, halfBuilt),
+                          {QStringLiteral("PRAGMA user_version = 2")}),
+                   "a version-only version 2 database can be planted"))
+            return 1;
+
+        qint64 repaired = 0;
+        if (!check(bool(history.append(halfBuilt, peer, sent, &repaired)),
+                   "a version 2 database with no table is repaired rather than refused") ||
+            !check(bool(history.settleSend(halfBuilt, repaired, SendState::Delivered)),
+                   "the repaired table has the column"))
             return 1;
     }
 

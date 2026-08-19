@@ -300,9 +300,18 @@ Violating any of these produces bugs that only show up against a real device:
   repairs a database left holding a version but no table. The version is then written back
   unconditionally, because it is the one *write* an open performs: a read-only file or a full card
   has to fail the preflight rather than the first message.
-- How a send fared is not stored. A message is written down when the daemon takes it, and whether
-  the peer went on to confirm it is a mark on a row rather than a column, so a reload shows every
-  stored message as `Sent` — that is #36.
+- How a send fared is stored, in a `send_state` column, but not at insert time: a message is written
+  down when the daemon takes it and the peer's answer arrives seconds to a minute later, so
+  `History::settleSend` updates a row `append` already wrote. The row number `append` hands back is
+  what finds it — the send token is a per-session tag, and by then the conversation may have been
+  reloaded — and `MainWindow::openSends_` holds that number until the peer confirms or the link
+  resets, which is when `CompanionClient` abandons the acks it was waiting on. The column is null
+  for an incoming message, where how far a send got means nothing, and null in every row an older
+  build wrote; both read back as `Sent`, which is what history used to hand back for everything. A
+  send left unconfirmed by a previous session stays amber for good, since nothing can settle it now:
+  that is the honest reading, and hiding it would answer the one question somebody has about an old
+  message — did it get through — with silence. `Pending` is never stored, so no row can come back
+  waiting on an answer nobody is listening for.
 - A message the app cannot place — no device identity yet, or a channel whose key is not in hand —
   goes to `History::orphanDeviceId()` / `History::orphanChannel(slot)` rather than being dropped:
   the node has already discarded its copy. Both are near-all-zero and so unreachable by a real
@@ -383,7 +392,8 @@ tight lines rather than the three a desktop client would spend.
   they replaced was drawn to imitate — so they carry the app's line weight rather than a second,
   hand-drawn one. Every state is the same width deliberately: a confirmation arriving is then a
   repaint of one row rather than a relayout of the conversation, and the bubble does not change
-  size under the reader.
+  size under the reader. The mark outlives the session that drew it — it is stored with the message
+  — so a conversation reopened days later still says what became of what was said in it.
 - A sidebar row is a disc plus two lines: the name, then the newest message with its stamp and an
   unread pill. The disc is the channel-type icon for a channel and the peer's `Avatar` monogram for
   a direct conversation — the same disc that peer gets in the address book and beside its own
