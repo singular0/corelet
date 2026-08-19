@@ -1,3 +1,20 @@
+corelet (0.2.0) unstable; urgency=medium
+
+  * Direct messages: a conversation per peer, a way to start one from the
+    address book, and a send mark saying whether the peer answered.
+  * The address book: who the node has heard from, with filtering, sorting
+    and a sync status for contacts and messages.
+  * Connect over the daemon's Unix socket, which is its default endpoint.
+  * Message ingestion is durable -- the drain is gated on storage opening,
+    so a destructive sync cannot outrun what can be written down.
+  * The history database carries a schema version and is migrated on open.
+  * Message and channel-name limits are byte budgets rather than character
+    counts, and every field with one holds itself inside it.
+  * The kind of channel is chosen before its dialog opens, and the '+' menu
+    says what it is offering.
+
+ -- Denis Yantarev <denis.yantarev@gmail.com>  Wed, 19 Aug 2026 09:58:48 +0100
+
 corelet (0.1.0) unstable; urgency=medium
 
   * Initial package.
