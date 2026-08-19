@@ -26,8 +26,11 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 - [x] Day markers and an unread marker, so a busy conversation opens on what is new.
 - [x] History kept on disk per node and surviving restarts. Collecting a message removes it from
       the node's inbox, so **Corelet's database is the only copy of your messages.**
-- [ ] Delivery confirmation for a direct message. The tick means your node accepted it, not that it
-      arrived.
+- [x] Delivery confirmation for a direct message: a ring while your node has yet to take it, a
+      tick once it has, two ticks when the person you sent it to acknowledges it, and an amber ring
+      if nothing comes back in time. A channel message has nobody to acknowledge it, so it stops at
+      one tick. The marks last as long as the app is running — a reloaded conversation shows a
+      plain tick again.
 
 **Channels**
 

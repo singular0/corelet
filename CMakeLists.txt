@@ -189,6 +189,24 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME conversation-model-test COMMAND conversation-model-test)
 
+    # The client's delivery reporting, over a transport the test supplies: the
+    # ack path cannot be exercised by hand without a second radio and a peer
+    # that answers. Listing transport.h is what has AUTOMOC generate the
+    # interface's metaobject -- no transport implementation is linked, so
+    # nothing here pulls in Network or Bluetooth.
+    add_executable(send-ack-test
+        tests/send_ack_test.cpp
+        src/protocol/transport.h
+        src/protocol/client.cpp
+        src/protocol/frame_codec.cpp)
+    target_include_directories(send-ack-test PRIVATE src)
+    target_link_libraries(send-ack-test PRIVATE Qt6::Core)
+    target_compile_definitions(send-ack-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(send-ack-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME send-ack-test COMMAND send-ack-test)
+
     # Header-only rules, so nothing of the app is compiled in beside the test.
     add_executable(text-limits-test tests/text_limits_test.cpp)
     target_include_directories(text-limits-test PRIVATE src)

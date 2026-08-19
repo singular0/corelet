@@ -161,22 +161,44 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
     return l;
 }
 
-void MessageDelegate::paintMark(QPainter* painter, const QRect& mark, bool pending) const {
-    QPen pen(pending ? theme::TextMuted : theme::Accent, markPenWidth_);
+// How far a message of ours got, in one glyph a few pixels across. Shape says
+// whether anything has answered for it -- a ring while nothing has, a tick once
+// something did -- and colour says how far that answer came from: muted for the
+// node taking it, the accent for the peer confirming it, and amber for a wait
+// that ran out. A channel message stops at the muted tick, which is honest:
+// nobody is addressed by one, so nobody can ever confirm it.
+void MessageDelegate::paintMark(QPainter* painter, const QRect& mark,
+                                model::Message::SendState state) const {
+    using SendState = model::Message::SendState;
+
+    const QColor colour = state == SendState::Delivered     ? theme::Accent
+                          : state == SendState::Unconfirmed ? theme::Warning
+                                                            : theme::TextMuted;
+    QPen pen(colour, markPenWidth_);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
     painter->setPen(pen);
     painter->setBrush(Qt::NoBrush);
 
     const QRectF m(mark);
-    if (pending) {
-        // An empty ring: the send is on its way and nothing has confirmed it.
+    if (state == SendState::Pending || state == SendState::Unconfirmed) {
+        // An empty ring: nothing has answered for this message. Muted while the
+        // daemon has yet to take it, amber once the peer's window has passed.
         painter->drawEllipse(m.adjusted(1, 1, -1, -1));
         return;
     }
-    painter->drawPolyline(QPolygonF {QPointF(m.left(), m.top() + m.height() * 0.55),
-                                     QPointF(m.left() + m.width() * 0.36, m.bottom()),
-                                     QPointF(m.right(), m.top() + m.height() * 0.1)});
+
+    // Two ticks for a confirmed message, overlapping rather than side by side:
+    // the mark keeps one width in every state, so a confirmation arriving
+    // repaints the row instead of relaying the conversation out again.
+    const bool doubled = state == SendState::Delivered;
+    const qreal width = doubled ? m.width() * 0.68 : m.width();
+    for (int i = 0; i < (doubled ? 2 : 1); i++) {
+        const qreal left = m.left() + i * (m.width() - width);
+        painter->drawPolyline(QPolygonF {QPointF(left, m.top() + m.height() * 0.55),
+                                         QPointF(left + width * 0.36, m.bottom()),
+                                         QPointF(left + width, m.top() + m.height() * 0.1)});
+    }
 }
 
 QSize MessageDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -235,8 +257,8 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 
     if (!l.mark.isNull())
         paintMark(painter, l.mark,
-                  index.data(model::ChatModel::SendStateRole).toInt() ==
-                      int(model::Message::SendState::Pending));
+                  model::Message::SendState(
+                      index.data(model::ChatModel::SendStateRole).toInt()));
 
     painter->setFont(bodyFont_);
     painter->setPen(theme::Text);

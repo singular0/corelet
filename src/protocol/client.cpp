@@ -19,6 +19,19 @@ constexpr int ReconnectMinMs = 1000;
 constexpr int ReconnectMaxMs = 15000;
 constexpr int BatteryPollMs = 60000;
 
+// RESP_SENT carries the node's own estimate of how long the peer's ack will
+// take, and it is a number the far end chose: a zero would report every direct
+// message unconfirmed the instant it went out, and a nonsense one would arm a
+// timer for days. A mesh round trip is seconds, and the node's retry ladder has
+// given up well inside two minutes.
+constexpr quint32 MinAckWindowMs = 1000;
+constexpr quint32 MaxAckWindowMs = 120000;
+
+// How many direct sends stay open to a late confirmation. Each is a token and
+// four bytes, and the daemon will not have more than 64 of its own retries in
+// flight, so this is about bounding a long session rather than a live limit.
+constexpr int MaxAwaitedAcks = 64;
+
 // Companion firmware reports a single-cell battery voltage, while the pane
 // needs a percentage. Use a deliberately simple linear estimate: a discharged
 // cell is 3.0 V and a full one is 4.2 V. Values outside that range are clamped,
@@ -148,6 +161,7 @@ void CompanionClient::resetConnection() {
     // which may well answer by starting another command.
     for (const Pending& p : dropped)
         if (p.onAbort) p.onAbort();
+    abandonAcks();
 }
 
 void CompanionClient::setState(State s, const QString& detail) {
@@ -257,10 +271,14 @@ void CompanionClient::handlePush(quint8 code, Reader& r) {
             requestContact(r.take(32));
             break;
         case PushSendConfirmed:
+            // ack(4) then the round trip in milliseconds, which nothing here
+            // shows: what a reader wants is that the message arrived.
+            confirmAck(r.take(AckHashSize));
+            break;
         case PushLogRxData:
         default:
-            // The rest of the push surface -- per-message ack confirmation, raw
-            // RX logging -- is deliberately ignored rather than half-handled.
+            // The rest of the push surface -- raw RX logging above all -- is
+            // deliberately ignored rather than half-handled.
             break;
     }
 }
@@ -819,11 +837,20 @@ void CompanionClient::sendDirectMessage(const model::Conversation& conversation,
         w.bytes(),
         [this, token](quint8 code, Reader& r) {
             if (code == RespSent) {
-                // SENT carries the ack the node expects back from the peer and
-                // how long it suggests waiting for it. Neither is read yet:
-                // this reports the daemon taking the message, and turning that
-                // into a delivery mark is #3.
+                // route(1): 0 for a known path, 1 for a flood, which is the
+                // node's business rather than anything to show. Then the ack
+                // the peer is expected to answer with, and how long the node
+                // suggests waiting for it.
+                r.skip(1);
+                const QByteArray ack = r.take(AckHashSize);
+                const quint32 window = r.u32();
+                // Taken by the daemon is what this answers; whether it arrives
+                // follows separately, or not at all.
                 Q_EMIT sendResult(token, true, {});
+                // A SENT too short to carry an ack -- an older firmware, a
+                // truncated frame -- leaves the message where it is rather than
+                // reporting a confirmation nothing could ever settle.
+                if (r.ok()) awaitAck(token, ack, window);
             } else if (code == RespErr) {
                 Q_EMIT sendResult(token, false, errorText(r.u8()));
             } else {
@@ -832,6 +859,56 @@ void CompanionClient::sendDirectMessage(const model::Conversation& conversation,
             return true;
         },
         [this, token] { Q_EMIT sendResult(token, false, QStringLiteral("connection lost")); });
+}
+
+// ---------------------------------------------------------------------------
+// Delivery acknowledgement
+// ---------------------------------------------------------------------------
+
+void CompanionClient::awaitAck(int token, const QByteArray& ack, quint32 suggestedMs) {
+    const int windowMs = int(qBound(MinAckWindowMs, suggestedMs, MaxAckWindowMs));
+
+    while (awaitedAcks_.size() >= MaxAwaitedAcks) {
+        const AwaitedAck forgotten = awaitedAcks_.takeFirst();
+        // Nothing can settle it once it is out of the list, and a row left on a
+        // bare tick would never say so.
+        if (!forgotten.lapsed) Q_EMIT sendUnconfirmed(forgotten.token);
+    }
+    awaitedAcks_.append(AwaitedAck {token, ack, false});
+
+    // Bound to `this`, so a session torn down before the window is up takes its
+    // timers with it. The entry is looked up again rather than captured: the
+    // ack may have arrived, or the cap above may have dropped it.
+    QTimer::singleShot(windowMs, this, [this, token] {
+        auto it = std::find_if(awaitedAcks_.begin(), awaitedAcks_.end(),
+                               [token](const AwaitedAck& a) { return a.token == token; });
+        if (it == awaitedAcks_.end() || it->lapsed) return;
+        it->lapsed = true;
+        Q_EMIT sendUnconfirmed(token);
+    });
+}
+
+void CompanionClient::confirmAck(const QByteArray& ack) {
+    if (ack.size() != AckHashSize) return;
+    auto it = std::find_if(awaitedAcks_.begin(), awaitedAcks_.end(),
+                           [&ack](const AwaitedAck& a) { return a.ack == ack; });
+    // Nothing of ours to settle: an ack for a send from a previous session the
+    // daemon is still retrying, or the same one arriving twice, which the
+    // firmware says outright can happen.
+    if (it == awaitedAcks_.end()) return;
+
+    const int token = it->token;
+    awaitedAcks_.erase(it);
+    Q_EMIT sendConfirmed(token);
+}
+
+void CompanionClient::abandonAcks() {
+    QVector<AwaitedAck> dropped;
+    dropped.swap(awaitedAcks_);
+    // Anything already reported as unconfirmed stays as it is; the rest have
+    // just run out of any way to be answered.
+    for (const AwaitedAck& a : dropped)
+        if (!a.lapsed) Q_EMIT sendUnconfirmed(a.token);
 }
 
 }  // namespace proto

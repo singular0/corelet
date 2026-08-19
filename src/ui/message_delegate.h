@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStyledItemDelegate>
 
+#include "model/types.h"
 #include "ui/avatar.h"
 
 // Draws one message as a bubble: incoming left, our own right, with a header
@@ -43,7 +44,8 @@ private:
     // Ring or tick, drawn rather than written: a bare Debian install is not
     // guaranteed a font with U+2713 in it, and two strokes cost less per row
     // than laying out another piece of text.
-    void paintMark(QPainter* painter, const QRect& mark, bool pending) const;
+    void paintMark(QPainter* painter, const QRect& mark,
+                   model::Message::SendState state) const;
 
     int viewportWidth_ = 400;
     QFont headerFont_;

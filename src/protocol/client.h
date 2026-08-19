@@ -139,6 +139,15 @@ Q_SIGNALS:
     // Exactly one of these arrives per sendChannelMessage(), including when the
     // link dies with the command still queued.
     void sendResult(int token, bool ok, const QString& error);
+    // The peer acknowledged a direct send, by the same token sendResult() gave
+    // it. A channel message never reaches this: nobody is addressed by one, so
+    // nobody answers for it.
+    void sendConfirmed(int token);
+    // A direct send nothing has answered for inside the window the node
+    // suggested, or one whose link went down while the ack was outstanding. Not
+    // final in the first case: the node keeps retrying afterwards, and a late
+    // ack still arrives as sendConfirmed().
+    void sendUnconfirmed(int token);
     // Answer to setChannel(). Emitted after channelsChanged() when it succeeds,
     // so a listener can open the slot it just created.
     void channelSaveResult(int channelIndex, bool ok, const QString& error);
@@ -205,6 +214,17 @@ private:
     void requestSync();
     void setMessageSyncing(bool syncing);
 
+    // Starts waiting for the peer's answer to a direct send. `suggestedMs` is
+    // the node's own estimate of the round trip, clamped here because it is a
+    // number the far end chose.
+    void awaitAck(int token, const QByteArray& ack, quint32 suggestedMs);
+    // Settles the send a PUSH_SEND_CONFIRMED answers, if it is one of ours.
+    void confirmAck(const QByteArray& ack);
+    // Gives up on every outstanding ack, which is what a link going down means:
+    // a push only reaches a live session, so one that has not arrived by then
+    // never will.
+    void abandonAcks();
+
     void setState(State s, const QString& detail = {});
     void resetConnection();
 
@@ -244,6 +264,22 @@ private:
     // several routes, and an advert that also moved the path pushes twice, so
     // without this the queue fills with re-reads of the same contact.
     QSet<QByteArray> contactFetches_;
+
+    // One direct send the peer has not answered for yet.
+    struct AwaitedAck {
+        int token = 0;
+        QByteArray ack;  // AckHashSize bytes, as RESP_SENT gave them
+        // Set once the suggested window passed with nothing back, which the
+        // owner has been told about. The entry outlives that: the node retries
+        // a direct message several times over about a minute after the window
+        // it suggested, and a message that did arrive should stop saying it
+        // did not.
+        bool lapsed = false;
+    };
+    // Oldest first, and bounded: entries outlive their window, so without a cap
+    // a long session would keep every send it ever made. The oldest is the one
+    // that has gone unanswered longest, which is the one to forget.
+    QVector<AwaitedAck> awaitedAcks_;
 };
 
 }  // namespace proto

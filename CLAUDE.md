@@ -9,14 +9,19 @@ each other.
 
 ## Build
 
-Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are four CTest binaries
+Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are five CTest binaries
 built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`,
-`tests/conversation_model_test.cpp`, `tests/text_limits_test.cpp`) plus
+`tests/conversation_model_test.cpp`, `tests/send_ack_test.cpp`, `tests/text_limits_test.cpp`) plus
 `tests/version_test.cmake`, which drives the version resolver over throwaway repositories rather
 than compiling anything; run them with `ctest --test-dir build`. They link only what they exercise
 and never Qt6::Test — nothing here needs a test framework, and adding one would put a dependency in
 `debian/control` for the sake of `QSignalSpy`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
 the history test opens a real QSQLITE database and `dh_auto_test` fails without the driver plugin.
+The send-ack test drives `CompanionClient` over a fake `Transport` of its own and links no real
+one, which is why it needs neither Network nor Bluetooth; `src/protocol/transport.h` is listed in
+its sources because AUTOMOC has nothing else to generate the interface's metaobject from. It is
+also the one test that waits on wall-clock time — a lapsed ack window is a timer firing — so it
+runs for a couple of seconds where the others are instant.
 
 ```sh
 # macOS (Homebrew Qt) — the configured build dir already points at /usr/local/opt/qt
@@ -232,9 +237,21 @@ Violating any of these produces bugs that only show up against a real device:
   somebody typed.
 - **Our own sends never come back over the air** — they are echoed locally in
   `MainWindow::onSendResult` when the daemon acknowledges. A channel send is answered `RESP_OK`
-  because there is no addressee to ack; a direct one is answered `RESP_SENT` with the ack the node
-  expects and a suggested timeout. Neither is read yet, so a direct message's tick means the daemon
-  took it and not that it arrived — that is #3.
+  because there is no addressee to ack, and stops there for good. A direct one is answered
+  `RESP_SENT` carrying the four-byte ack the peer must answer with and how long the node suggests
+  waiting for it, and `PUSH_SEND_CONFIRMED` hands that ack back when it arrives — which is why
+  `sendResult()` is not the end of a direct send: `sendConfirmed()` and `sendUnconfirmed()` follow,
+  by the same token, and the row's mark moves with them.
+- **An ack outlives the window it was given.** The window `RESP_SENT` suggests is a first-attempt
+  round trip (8 s down a known path, 30 s flooding), while the node's retry ladder goes on for
+  about a minute after it and the last attempt floods — so an ack arriving late is ordinary, not an
+  anomaly. `CompanionClient::awaitAck` therefore reports `sendUnconfirmed()` when the window
+  lapses but keeps listening, and a later `PUSH_SEND_CONFIRMED` still upgrades the row; the entry
+  is dropped only by a link reset, which is when a push can no longer reach us, or by the cap on
+  how many sends stay open. The window is clamped because the far end chose it: a zero would
+  report every message unconfirmed as it left. The ack is four bytes and the firmware says outright
+  that the same one can arrive twice, so it is matched against this session's sends and never
+  treated as an identity.
 - **Only framing differs between links.** `Transport` hides it: the two stream links length-prefix
   and de-frame incrementally, BLE is one Nordic UART write/notification per frame. Everything above
   `Transport` is link-agnostic; don't add transport branches to `CompanionClient`.
@@ -283,6 +300,9 @@ Violating any of these produces bugs that only show up against a real device:
   repairs a database left holding a version but no table. The version is then written back
   unconditionally, because it is the one *write* an open performs: a read-only file or a full card
   has to fail the preflight rather than the first message.
+- How a send fared is not stored. A message is written down when the daemon takes it, and whether
+  the peer went on to confirm it is a mark on a row rather than a column, so a reload shows every
+  stored message as `Sent` — that is #36.
 - A message the app cannot place — no device identity yet, or a channel whose key is not in hand —
   goes to `History::orphanDeviceId()` / `History::orphanChannel(slot)` rather than being dropped:
   the node has already discarded its copy. Both are near-all-zero and so unreachable by a real
@@ -352,6 +372,15 @@ tight lines rather than the three a desktop client would spend.
   bottom** (`MainWindow::appendToView`) — yanking the view while the user reads back is worse than
   a missed jump. An accent divider marks the first unseen message when returning to a channel or
   when traffic arrives while the view is scrolled back.
+- The send mark on our own messages says how far one got, in a glyph a few pixels across
+  (`MessageDelegate::paintMark`): shape carries whether anything has answered for the message — a
+  ring while nothing has, a tick once something did — and colour carries how far that answer came
+  from, muted for the daemon taking it, accent for the peer confirming it, amber for a wait that
+  ran out. So the accent means one thing everywhere: somebody acknowledged this. A channel message
+  stops at the muted tick, which is the whole truth about it — nobody is addressed by one, so
+  nobody can confirm it. Every state is the same width deliberately: a confirmation arriving is
+  then a repaint of one row rather than a relayout of the conversation, and the bubble does not
+  change size under the reader.
 - A sidebar row is a disc plus two lines: the name, then the newest message with its stamp and an
   unread pill. The disc is the channel-type icon for a channel and the peer's `Avatar` monogram for
   a direct conversation — the same disc that peer gets in the address book and beside its own

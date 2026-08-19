@@ -54,13 +54,21 @@ int ChatModel::rowForToken(int sendToken) const {
     return -1;
 }
 
-bool ChatModel::markSent(int sendToken) {
+bool ChatModel::setSendState(int sendToken, Message::SendState state) {
     const int row = rowForToken(sendToken);
     if (row < 0) return false;
 
-    messages_[row].sendState = Message::SendState::Sent;
-    messages_[row].sendToken = 0;
-    // The mark is the same width in either state, so this repaints the row
+    Message& msg = messages_[row];
+    msg.sendState = state;
+    // The token is what the next answer finds this row by, so it is dropped
+    // only once there can be no next answer: nothing follows the daemon taking
+    // a channel message, and nothing follows a peer confirming a direct one. An
+    // unconfirmed send keeps its token, because the node goes on retrying after
+    // the window it suggested and a late confirmation still belongs here.
+    if (state == Message::SendState::Delivered ||
+        (state == Message::SendState::Sent && msg.conversation.isChannel()))
+        msg.sendToken = 0;
+    // The mark is the same width in every state, so this repaints the row
     // without asking the view to lay it out again.
     Q_EMIT dataChanged(index(row), index(row), {SendStateRole});
     return true;

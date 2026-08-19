@@ -216,10 +216,17 @@ inline size_t qHash(const Conversation& conversation, size_t seed = 0) {
 struct Message {
     // How far one of our own sends has got. Meaningless for incoming messages,
     // and for anything read back from history: the app writes a message down
-    // only once the daemon has taken it, so a stored message is always sent.
+    // only once the daemon has taken it, and how it fared afterwards is not
+    // stored, so a message from history is always Sent.
     enum class SendState {
         Sent,     // the daemon acknowledged the command
         Pending,  // shown optimistically, still waiting for that answer
+        // A channel message stops at Sent -- it has no addressee, so nobody
+        // answers for it. A direct one does: the node reports the ack it
+        // expects back from the peer and how long it suggests waiting, and
+        // these two are how that wait ends.
+        Delivered,    // the peer acknowledged it
+        Unconfirmed,  // nothing came back inside the window the node gave
     };
 
     // Where this belongs. Invalid when the app could not work that out -- a slot

@@ -93,6 +93,12 @@ inline constexpr int ContactPathField = 64;
 
 inline constexpr quint8 TxtPlain = 0;
 
+// The hash a direct message's recipient answers with, carried by RESP_SENT and
+// handed back by PUSH_SEND_CONFIRMED. Four bytes is short enough to collide --
+// the firmware notes that the same ack can even arrive twice -- so it is only
+// ever matched against sends this session started, never treated as an identity.
+inline constexpr int AckHashSize = 4;
+
 // How much text fits in those fields is in protocol/text_limits.h: it is a
 // count of encoded bytes rather than a wire number, and derived from these.
 

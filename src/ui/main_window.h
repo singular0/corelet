@@ -45,6 +45,8 @@ private Q_SLOTS:
     void onMessageReceived(const model::Message& msg);
     void onDirectMessageReceived(const model::Message& msg);
     void onSendResult(int token, bool ok, const QString& error);
+    void onSendConfirmed(int token);
+    void onSendUnconfirmed(int token);
     void onChannelSaveResult(int channelIndex, bool ok, const QString& error);
     void onChannelRemoveResult(int channelIndex, bool ok, const QString& error);
 

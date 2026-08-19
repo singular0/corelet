@@ -43,13 +43,13 @@ public:
     const Message& at(int row) const { return messages_.at(row); }
     int firstUnseenRow() const { return unseenBreakRow_; }
 
-    // A message echoed optimistically is the only row that changes after it is
-    // inserted: the daemon either takes it, or it never happened and the row
-    // goes away again. Anything that reloads the conversation -- a channel
-    // switch, a reconnect re-enumerating the channels -- drops that row, since
-    // a send still in flight is not in history yet, so markSent() reports
+    // A message of our own is the only row that changes after it is inserted:
+    // the daemon takes it or it never happened, and a direct one then either
+    // reaches its peer or does not. Anything that reloads the conversation -- a
+    // channel switch, a reconnect re-enumerating the channels -- drops the row a
+    // send in flight went up as, since it is not in history yet, so this reports
     // whether it found one and the caller can put the message back.
-    bool markSent(int sendToken);
+    bool setSendState(int sendToken, Message::SendState state);
     void removePending(int sendToken);
 
 private:

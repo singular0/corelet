@@ -193,6 +193,10 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
     connect(client_, &proto::CompanionClient::directMessageReceived, this,
             &MainWindow::onDirectMessageReceived);
     connect(client_, &proto::CompanionClient::sendResult, this, &MainWindow::onSendResult);
+    connect(client_, &proto::CompanionClient::sendConfirmed, this,
+            &MainWindow::onSendConfirmed);
+    connect(client_, &proto::CompanionClient::sendUnconfirmed, this,
+            &MainWindow::onSendUnconfirmed);
     connect(client_, &proto::CompanionClient::channelSaveResult, this,
             &MainWindow::onChannelSaveResult);
     connect(client_, &proto::CompanionClient::channelRemoveResult, this,
@@ -1299,8 +1303,12 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
 
     // Only now is it worth writing down. History is what the app has instead of
     // the daemon's inbox, and a message that never left has no business in it.
+    // What follows the daemon taking it is not stored: a direct message's
+    // delivery is settled within the session that sent it or not at all.
     msg.sendState = model::Message::SendState::Sent;
-    msg.sendToken = 0;
+    // A direct send is not finished by the daemon taking it, so the row keeps
+    // the tag the peer's answer will find it by. A channel send has none coming.
+    msg.sendToken = pending.conversation.isDirect() ? token : 0;
     const model::HistoryResult stored =
         history_.append(pending.deviceId, pending.conversation, msg);
     // The message did go out, so it stays on screen; what it says about storage
@@ -1312,9 +1320,22 @@ void MainWindow::onSendResult(int token, bool ok, const QString& error) {
     // The row it went up as is gone if the conversation was reloaded meanwhile.
     // Put the message back when that happened to the conversation being looked
     // at; any other one reads it from history when it is opened.
-    if (!chatModel_->markSent(token) && stillShowingDevice &&
-        pending.conversation == current_)
+    if (!chatModel_->setSendState(token, model::Message::SendState::Sent) &&
+        stillShowingDevice && pending.conversation == current_)
         appendToView(msg);
+}
+
+// The peer answered for a direct message, or the wait for that answer ran out.
+// Both are the mark on one row and nothing more: a notice per unacknowledged
+// message would be constant noise on a mesh where a flood round trip routinely
+// takes half a minute, and the row a reload replaced is not one to hunt down --
+// history has the message, and it never claimed to be confirmed.
+void MainWindow::onSendConfirmed(int token) {
+    chatModel_->setSendState(token, model::Message::SendState::Delivered);
+}
+
+void MainWindow::onSendUnconfirmed(int token) {
+    chatModel_->setSendState(token, model::Message::SendState::Unconfirmed);
 }
 
 // The node prepends its own name to every channel message it sends, so what is
