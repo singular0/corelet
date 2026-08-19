@@ -378,9 +378,12 @@ tight lines rather than the three a desktop client would spend.
   from, muted for the daemon taking it, accent for the peer confirming it, amber for a wait that
   ran out. So the accent means one thing everywhere: somebody acknowledged this. A channel message
   stops at the muted tick, which is the whole truth about it — nobody is addressed by one, so
-  nobody can confirm it. Every state is the same width deliberately: a confirmation arriving is
-  then a repaint of one row rather than a relayout of the conversation, and the bubble does not
-  change size under the reader.
+  nobody can confirm it. All four are Lucide glyphs from the same `.qrc` as every other icon —
+  `circle`, `check` and Lucide's own `check-check`, which is what the overlapping pair of strokes
+  they replaced was drawn to imitate — so they carry the app's line weight rather than a second,
+  hand-drawn one. Every state is the same width deliberately: a confirmation arriving is then a
+  repaint of one row rather than a relayout of the conversation, and the bubble does not change
+  size under the reader.
 - A sidebar row is a disc plus two lines: the name, then the newest message with its stamp and an
   unread pill. The disc is the channel-type icon for a channel and the peer's `Avatar` monogram for
   a direct conversation — the same disc that peer gets in the address book and beside its own

@@ -10,6 +10,8 @@ Copyright: 2026 Lucide Icons and Contributors
 License: ISC
 
 Files:
+ src/ui/icons/check.svg
+ src/ui/icons/circle.svg
  src/ui/icons/hash.svg
  src/ui/icons/info.svg
  src/ui/icons/lock.svg

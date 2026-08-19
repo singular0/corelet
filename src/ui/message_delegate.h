@@ -41,11 +41,11 @@ private:
 
     Layout layoutFor(const QModelIndex& index, int width) const;
     QString metaText(const QModelIndex& index, int availableWidth) const;
-    // Ring or tick, drawn rather than written: a bare Debian install is not
-    // guaranteed a font with U+2713 in it, and two strokes cost less per row
-    // than laying out another piece of text.
-    void paintMark(QPainter* painter, const QRect& mark,
-                   model::Message::SendState state) const;
+    // Ring or tick as a Lucide glyph rather than a character: a bare Debian
+    // install is not guaranteed a font with U+2713 in it, and `icons::tinted`
+    // caches the pixmap, so a row costs a blit rather than a text layout.
+    void paintMark(QPainter* painter, const QRect& mark, model::Message::SendState state,
+                   qreal dpr) const;
 
     int viewportWidth_ = 400;
     QFont headerFont_;
@@ -54,8 +54,7 @@ private:
     Avatar avatar_;
     int avatarSize_ = 30;
     int avatarGap_ = 8;
-    int markSize_ = 8;
+    int markSize_ = 12;
     int markGap_ = 5;
-    int markAllowance_ = 13;
-    qreal markPenWidth_ = 1.4;
+    int markAllowance_ = 17;
 };

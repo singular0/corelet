@@ -23,5 +23,8 @@
         <file>battery-medium.svg</file>
         <file>info.svg</file>
         <file>circle-help.svg</file>
+        <file>circle.svg</file>
+        <file>check.svg</file>
+        <file>check-check.svg</file>
     </qresource>
 </RCC>

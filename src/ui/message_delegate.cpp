@@ -5,8 +5,10 @@
 #include <QDateTime>
 #include <QFontMetrics>
 #include <QPainter>
+#include <QWidget>
 
 #include "model/chat_model.h"
+#include "ui/icons.h"
 #include "ui/row_format.h"
 #include "ui/theme.h"
 
@@ -27,8 +29,9 @@ constexpr int AvatarSize = 30;
 constexpr int AvatarGap = 8;
 // The send mark starts the metadata on our own messages. It is the same width
 // in either state, so a message being taken by the daemon is a repaint and not
-// a relayout.
-constexpr int MarkSize = 8;
+// a relayout. Larger than the strokes it replaced because a Lucide glyph draws
+// inside its 24x24 grid rather than filling the box it is given.
+constexpr int MarkSize = 12;
 constexpr int MarkGap = 5;
 
 // Bubbles stop well short of the full width so that the left/right alignment
@@ -66,7 +69,6 @@ MessageDelegate::MessageDelegate(QObject* parent)
     markSize_ = theme::scaled(bodyFont_, MarkSize);
     markGap_ = theme::scaled(bodyFont_, MarkGap);
     markAllowance_ = markSize_ + markGap_;
-    markPenWidth_ *= qreal(markSize_) / MarkSize;
 }
 
 void MessageDelegate::setViewportWidth(int width) {
@@ -167,38 +169,32 @@ MessageDelegate::Layout MessageDelegate::layoutFor(const QModelIndex& index, int
 // node taking it, the accent for the peer confirming it, and amber for a wait
 // that ran out. A channel message stops at the muted tick, which is honest:
 // nobody is addressed by one, so nobody can ever confirm it.
+//
+// Lucide's own double tick is what the overlapping pair here was drawn to
+// imitate, and every icon comes off the same square grid, so the four states
+// still occupy an identical box: a confirmation arriving repaints one row
+// instead of laying the conversation out again.
 void MessageDelegate::paintMark(QPainter* painter, const QRect& mark,
-                                model::Message::SendState state) const {
+                                model::Message::SendState state, qreal dpr) const {
     using SendState = model::Message::SendState;
 
-    const QColor colour = state == SendState::Delivered     ? theme::Accent
-                          : state == SendState::Unconfirmed ? theme::Warning
-                                                            : theme::TextMuted;
-    QPen pen(colour, markPenWidth_);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    painter->setPen(pen);
-    painter->setBrush(Qt::NoBrush);
-
-    const QRectF m(mark);
-    if (state == SendState::Pending || state == SendState::Unconfirmed) {
-        // An empty ring: nothing has answered for this message. Muted while the
-        // daemon has yet to take it, amber once the peer's window has passed.
-        painter->drawEllipse(m.adjusted(1, 1, -1, -1));
-        return;
+    QString glyph = QStringLiteral("circle");
+    QColor colour = theme::TextMuted;
+    switch (state) {
+        case SendState::Pending:
+            break;
+        case SendState::Unconfirmed:
+            colour = theme::Warning;
+            break;
+        case SendState::Sent:
+            glyph = QStringLiteral("check");
+            break;
+        case SendState::Delivered:
+            glyph = QStringLiteral("check-check");
+            colour = theme::Accent;
+            break;
     }
-
-    // Two ticks for a confirmed message, overlapping rather than side by side:
-    // the mark keeps one width in every state, so a confirmation arriving
-    // repaints the row instead of relaying the conversation out again.
-    const bool doubled = state == SendState::Delivered;
-    const qreal width = doubled ? m.width() * 0.68 : m.width();
-    for (int i = 0; i < (doubled ? 2 : 1); i++) {
-        const qreal left = m.left() + i * (m.width() - width);
-        painter->drawPolyline(QPolygonF {QPointF(left, m.top() + m.height() * 0.55),
-                                         QPointF(left + width * 0.36, m.bottom()),
-                                         QPointF(left + width, m.top() + m.height() * 0.1)});
-    }
+    painter->drawPixmap(mark, icons::tinted(glyph, mark.width(), colour, dpr));
 }
 
 QSize MessageDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -240,8 +236,9 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     painter->drawRoundedRect(l.bubble, BubbleRadius, BubbleRadius);
 
     const QString sender = index.data(model::ChatModel::SenderRole).toString();
-    // The mark is drawn separately because the target system font may not have
-    // a tick glyph; the dot and timestamp remain ordinary right-aligned text.
+    // The mark is an icon rather than a character because the target system font
+    // is not guaranteed a tick glyph; the dot and timestamp remain ordinary
+    // right-aligned text.
     const int markAllowance = l.mark.isNull() ? 0 : markAllowance_;
     const QString meta = metaText(index, l.header.width() - markAllowance);
 
@@ -257,8 +254,8 @@ void MessageDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 
     if (!l.mark.isNull())
         paintMark(painter, l.mark,
-                  model::Message::SendState(
-                      index.data(model::ChatModel::SendStateRole).toInt()));
+                  model::Message::SendState(index.data(model::ChatModel::SendStateRole).toInt()),
+                  option.widget ? option.widget->devicePixelRatioF() : 1.0);
 
     painter->setFont(bodyFont_);
     painter->setPen(theme::Text);
