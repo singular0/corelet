@@ -398,6 +398,40 @@ void CompanionClient::requestBattery() {
 }
 
 // ---------------------------------------------------------------------------
+// Adverts
+// ---------------------------------------------------------------------------
+
+void CompanionClient::sendAdvert(bool flood) {
+    if (state_ != State::Ready) {
+        Q_EMIT advertResult(flood, false, QStringLiteral("not connected"));
+        return;
+    }
+
+    // flood(1). An absent byte means flood at the far end, but say it either
+    // way: which of the two this is is the whole content of the command, and it
+    // should not rest on a default the app cannot see.
+    Writer w(CmdSendSelfAdvert);
+    w.u8(flood ? 1 : 0);
+
+    enqueue(
+        w.bytes(),
+        [this, flood](quint8 code, Reader& r) {
+            if (code == RespOk) {
+                // The node has taken the packet for transmission. Nothing
+                // acknowledges an advert -- it is addressed to everybody -- so
+                // there is no second answer coming and this is the end of it.
+                Q_EMIT advertResult(flood, true, {});
+            } else if (code == RespErr) {
+                Q_EMIT advertResult(flood, false, errorText(r.u8()));
+            } else {
+                Q_EMIT advertResult(flood, false, QStringLiteral("unexpected reply"));
+            }
+            return true;
+        },
+        [this, flood] { Q_EMIT advertResult(flood, false, QStringLiteral("connection lost")); });
+}
+
+// ---------------------------------------------------------------------------
 // Channels
 // ---------------------------------------------------------------------------
 

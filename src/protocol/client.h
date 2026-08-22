@@ -98,6 +98,18 @@ public:
     // A name over MaxChannelNameBytes is refused through channelSaveResult().
     void setChannel(int channelIndex, const QString& name, const QByteArray& secret);
 
+    // Announces this node to the mesh: a name, a public key and a route back,
+    // which is the only way anybody learns any of the three. A node normally
+    // does this on a timer the daemon configures -- and that timer can be off
+    // entirely -- so one that has just come up may be unreachable until
+    // somebody asks it to speak up.
+    //
+    // `flood` picks how far it goes: flooded, repeaters pass it on and the
+    // whole mesh hears it; zero-hop, only nodes in direct radio range do. The
+    // answer says the node took it for transmission, which is as much as
+    // anything can say about a broadcast nobody acknowledges.
+    void sendAdvert(bool flood);
+
     // Empties a slot. There is no delete command: a slot with an all-zero key is
     // what "unused" means on the wire, so removing a channel is a SET_CHANNEL
     // like any other. The key is gone from the device afterwards -- a private
@@ -148,6 +160,10 @@ Q_SIGNALS:
     // final in the first case: the node keeps retrying afterwards, and a late
     // ack still arrives as sendConfirmed().
     void sendUnconfirmed(int token);
+    // Answer to sendAdvert(), carrying back the reach it was asked for so a
+    // report can name it. Exactly one arrives per call, including when the link
+    // dies with the command still queued.
+    void advertResult(bool flood, bool ok, const QString& error);
     // Answer to setChannel(). Emitted after channelsChanged() when it succeeds,
     // so a listener can open the slot it just created.
     void channelSaveResult(int channelIndex, bool ok, const QString& error);

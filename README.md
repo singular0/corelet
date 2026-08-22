@@ -45,6 +45,9 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 - [x] A node info panel with the public key, position and radio settings.
 - [x] A contacts window: everyone the node has heard from, with their public key, when their last
       advert arrived and how far it travelled — and the place you pick somebody to message.
+- [x] Advertise on demand, so a node that has just come up does not have to wait for its advert
+      timer before anybody can reach it. Choose whether repeaters pass it on or only nodes in
+      direct range hear it.
 - [ ] Telemetry.
 - [ ] Changing device settings.
 

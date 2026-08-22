@@ -185,7 +185,10 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
   a `.qrc` (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
   `debian/copyright`, which are what the README's license section points at). Anything two lists
   have to say the same way is shared rather than copied: `row_format.h` for a last-heard stamp and
-  a hop count, `Avatar` for the disc a name is drawn as.
+  a hop count, `Avatar` for the disc a name is drawn as, `ui::popupUnder` for dropping a menu under
+  the icon button that opened it — the last of which exists for the hover repair rather than the
+  placement, since a popup holds the mouse grab and the button under it never sees the pointer
+  leave.
 
 This is a client only. All radio work, crypto and channel state live in `coreletd`
 (`../coreletd`) or the device firmware.
@@ -411,6 +414,13 @@ tight lines rather than the three a desktop client would spend.
   lives only in `QSettings`. Removing one is therefore purely local, needs no link, and warns about
   something quite different from removing a channel — hence `MainWindow::confirmRemoval` taking the
   impact list rather than owning it.
+- The node header's advert button offers both reaches rather than picking one, because they are
+  different acts: flooded, repeaters carry it and the whole mesh learns the node; zero-hop, only
+  whoever is in direct radio range does, which is how a path is established without loading the
+  mesh. It reports through the notice line and stops at what the node answered — an advert is
+  addressed to everybody, so nothing acknowledges it and there is no delivery to wait for, unlike
+  a direct send. The button sits at the head of the header rather than beside Connect: it is the
+  one action there that puts something on the air, and the uConsole's input is a trackball.
 - Every field with a byte budget carries a `ByteLimit` (`ui/byte_limit.h`), which is what
   `QLineEdit::setMaxLength` would be if it counted encoded bytes instead of characters — the whole
   reason it exists, since the same 32-byte field holds 32 Latin letters, 16 Cyrillic ones or 8

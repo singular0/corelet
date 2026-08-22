@@ -3,7 +3,6 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QCoreApplication>
-#include <QCursor>
 #include <QDialog>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -32,6 +31,7 @@
 #include "ui/dialog_settings.h"
 #include "ui/elided_label.h"
 #include "ui/icons.h"
+#include "ui/menu_button.h"
 #include "ui/message_delegate.h"
 #include "ui/node_pane.h"
 #include "ui/share_channel_dialog.h"
@@ -197,6 +197,8 @@ MainWindow::MainWindow(const proto::ConnectTarget& target, QWidget* parent)
             &MainWindow::onSendConfirmed);
     connect(client_, &proto::CompanionClient::sendUnconfirmed, this,
             &MainWindow::onSendUnconfirmed);
+    connect(client_, &proto::CompanionClient::advertResult, this,
+            &MainWindow::onAdvertResult);
     connect(client_, &proto::CompanionClient::channelSaveResult, this,
             &MainWindow::onChannelSaveResult);
     connect(client_, &proto::CompanionClient::channelRemoveResult, this,
@@ -252,6 +254,27 @@ void MainWindow::showContacts() {
     // what makes that a guard rather than a coat of paint.
     if (client_->state() != proto::CompanionClient::State::Ready) return;
     ContactsDialog(client_, this).exec();
+}
+
+void MainWindow::requestAdvert(bool flood) {
+    // Which of the two was asked for is worth saying once it is done rather
+    // than now: the node has to take it first, and until it does the only
+    // honest thing to report is that the app is waiting.
+    showNotice(QStringLiteral("Advertising..."), 10000);
+    client_->sendAdvert(flood);
+}
+
+void MainWindow::onAdvertResult(bool flood, bool ok, const QString& error) {
+    if (!ok) {
+        showNotice(QStringLiteral("Could not advertise: %1").arg(error), 8000, true);
+        return;
+    }
+    // As far as it goes: the node has put the packet on the air, and an advert
+    // is addressed to everybody, so nothing is going to come back and say who
+    // heard it. Name the reach instead, which is the one thing that was chosen.
+    showNotice(flood ? QStringLiteral("Advert sent to the mesh")
+                     : QStringLiteral("Advert sent to nodes in direct range"),
+               5000);
 }
 
 void MainWindow::showAddMenu() {
@@ -323,19 +346,7 @@ void MainWindow::showAddMenu() {
             action->setToolTip(full);
     }
 
-    QAction* chosen = menu.exec(addButton_->mapToGlobal(QPoint(0, addButton_->height())));
-
-    // A popup holds the mouse grab for as long as it is up, so the button that
-    // opened it never sees the pointer leave: dismissed with a click somewhere
-    // else, the '+' would stay lit as though the cursor were still on it. Only
-    // when the pointer really has moved off -- clearing the flag under it would
-    // unlight a button the cursor is still on and leave it that way, since no
-    // second enter is coming.
-    if (!addButton_->rect().contains(addButton_->mapFromGlobal(QCursor::pos()))) {
-        addButton_->setAttribute(Qt::WA_UnderMouse, false);
-        QEvent leave(QEvent::Leave);
-        QCoreApplication::sendEvent(addButton_, &leave);
-    }
+    QAction* chosen = ui::popupUnder(menu, addButton_);
 
     if (chosen == directMessage) {
         startDirectConversation();
@@ -639,6 +650,7 @@ void MainWindow::buildUi() {
     connect(nodePane_, &NodePane::connectRequested, this, &MainWindow::openConnectDialog);
     connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
     connect(nodePane_, &NodePane::contactsRequested, this, &MainWindow::showContacts);
+    connect(nodePane_, &NodePane::advertRequested, this, &MainWindow::requestAdvert);
     connect(addButton_, &QToolButton::clicked, this, &MainWindow::showAddMenu);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentConversation);

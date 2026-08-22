@@ -47,6 +47,7 @@ private Q_SLOTS:
     void onSendResult(int token, bool ok, const QString& error);
     void onSendConfirmed(int token);
     void onSendUnconfirmed(int token);
+    void onAdvertResult(bool flood, bool ok, const QString& error);
     void onChannelSaveResult(int channelIndex, bool ok, const QString& error);
     void onChannelRemoveResult(int channelIndex, bool ok, const QString& error);
 
@@ -57,6 +58,10 @@ private:
     void openConnectDialog();
     // The address book, which lives on the node: nothing to show without a link.
     void showContacts();
+    // Asks the node to announce itself. Worth saying something about while it
+    // is in flight: the command queues behind whatever else is on the link, and
+    // a broadcast that nobody answers has no other sign of having happened.
+    void requestAdvert(bool flood);
     // The add button's menu: a direct conversation, then one item per kind of
     // channel, since which kind is being added is settled before any of them
     // has a field to fill in.

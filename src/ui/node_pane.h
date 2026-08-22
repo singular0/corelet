@@ -35,6 +35,9 @@ Q_SIGNALS:
     // The address book is the node's, not the app's, so the action to open it
     // belongs beside the node it would be read from.
     void contactsRequested();
+    // Speak up, so the mesh learns this node is here. `flood` is how far it is
+    // to carry: through repeaters, or only to whoever is in direct range.
+    void advertRequested(bool flood);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -42,9 +45,11 @@ protected:
 
 private:
     void showDeviceInfo();
+    void showAdvertMenu();
     void updateBatteryDisplay();
     void updateConnectionAction(bool active);
 
+    QToolButton* advertButton_ = nullptr;
     QToolButton* contactsButton_ = nullptr;
     QToolButton* infoButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;

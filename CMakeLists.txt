@@ -71,6 +71,7 @@ add_executable(corelet
     src/ui/icons.cpp
     src/ui/avatar.cpp
     src/ui/byte_limit.cpp
+    src/ui/menu_button.cpp
     src/ui/conversation_delegate.cpp
     src/ui/contact_delegate.cpp
     src/ui/message_delegate.cpp

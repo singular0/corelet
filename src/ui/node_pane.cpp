@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QStyle>
@@ -20,6 +21,7 @@
 #include "ui/elided_label.h"
 #include "ui/dialog_settings.h"
 #include "ui/icons.h"
+#include "ui/menu_button.h"
 #include "ui/theme.h"
 
 namespace {
@@ -108,8 +110,16 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     title->setFont(headerFont);
     title->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
 
-    // Both of these need a live link before they have anything to show, so both
-    // start disabled and follow the connection.
+    // All three need a live link before they have anything to do, so all three
+    // start disabled and follow the connection. The advert leads, furthest from
+    // the connection action: it is the one button here that puts something on
+    // the air, and a trackball slip onto Disconnect instead is a worse mistake
+    // than the other way round.
+    advertButton_ = headerButton(QStringLiteral("megaphone"), QStringLiteral("Advertise"),
+                                 iconSize_, devicePixelRatioF());
+    // "Advertise" alone does not say what is being advertised, which is the
+    // node itself rather than anything in the window.
+    advertButton_->setToolTip(QStringLiteral("Announce this node to the mesh"));
     contactsButton_ = headerButton(QStringLiteral("users"), QStringLiteral("Contacts"),
                                    iconSize_, devicePixelRatioF());
     infoButton_ = headerButton(QStringLiteral("info"), QStringLiteral("Node information"),
@@ -124,6 +134,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
     updateConnectionAction(false);
 
     headerLayout->addWidget(title, 1);
+    headerLayout->addWidget(advertButton_);
     headerLayout->addWidget(contactsButton_);
     headerLayout->addWidget(infoButton_);
     headerLayout->addWidget(connectionButton_);
@@ -159,6 +170,7 @@ NodePane::NodePane(QWidget* parent) : QWidget(parent) {
         else
             Q_EMIT connectRequested();
     });
+    connect(advertButton_, &QToolButton::clicked, this, &NodePane::showAdvertMenu);
     connect(infoButton_, &QToolButton::clicked, this, &NodePane::showDeviceInfo);
     connect(contactsButton_, &QToolButton::clicked, this, &NodePane::contactsRequested);
 }
@@ -221,6 +233,28 @@ void NodePane::updateBatteryDisplay() {
         batteryRow_->setToolTip(QStringLiteral("Click to show battery voltage"));
     }
     batteryRow_->setCursor(Qt::PointingHandCursor);
+}
+
+// How far an advert travels is chosen before it is sent and there is nothing
+// else to fill in, so it is a menu on the button rather than a dialog behind it
+// -- the same shape the sidebar's add button takes for the same reason.
+void NodePane::showAdvertMenu() {
+    QMenu menu(this);
+    // Tooltips because the difference between these is what the mesh does with
+    // the packet, which no wording short enough for a menu row conveys.
+    menu.setToolTipsVisible(true);
+
+    QAction* flood = menu.addAction(QStringLiteral("Advertise to the Mesh"));
+    flood->setToolTip(
+        QStringLiteral("Repeaters pass it on, so nodes out of direct range hear it too"));
+    QAction* zeroHop = menu.addAction(QStringLiteral("Advertise to Neighbours"));
+    zeroHop->setToolTip(QStringLiteral("Zero hop: only nodes in direct radio range hear it"));
+
+    QAction* chosen = ui::popupUnder(menu, advertButton_);
+    if (chosen == flood)
+        Q_EMIT advertRequested(true);
+    else if (chosen == zeroHop)
+        Q_EMIT advertRequested(false);
 }
 
 void NodePane::showDeviceInfo() {
@@ -323,9 +357,11 @@ void NodePane::setConnection(const QString& text, const QColor& color, bool acti
     connected_ = connected;
     updateBatteryDisplay();
     infoButton_->setEnabled(connected_ && device_.pubkey.size() == 32);
-    // Unlike the info dialog, this needs no device identity: the address book is
-    // the node's own and reading it only takes a link.
+    // Unlike the info dialog, neither of these needs a device identity: the
+    // address book is the node's own and an advert is the node describing
+    // itself, so both only take a link.
     contactsButton_->setEnabled(connected_);
+    advertButton_->setEnabled(connected_);
     if (active == connectionActive_) return;
 
     updateConnectionAction(active);
