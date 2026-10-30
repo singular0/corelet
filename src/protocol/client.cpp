@@ -3,6 +3,8 @@
 #include <QDateTime>
 #include <QTimer>
 #include <algorithm>
+#include <climits>
+#include <cmath>
 
 namespace proto {
 
@@ -291,40 +293,19 @@ void CompanionClient::beginHandshake() {
     channels_.clear();
     channelsOutstanding_ = 0;
     contacts_.clear();
+    device_ = {};
+    rxDelayMilli_ = 0;
 
-    // APP_START: version byte, six reserved, then the app name.
-    Writer start(CmdAppStart);
-    start.u8(1).padded({}, 6).tail(QByteArrayLiteral("corelet"));
-    enqueue(start.bytes(), [this](quint8 code, Reader& r) {
-        if (code != RespSelfInfo) {
-            // Whatever is on the other end, it is not speaking this protocol.
-            transport_->close();
-            onClosed(QStringLiteral("unexpected handshake reply"));
-            return true;
-        }
+    // First, as the official app sends it: upstream firmware frames every
+    // message it receives from here on in the V3 shape this client parses only
+    // once an app has said it understands that, and the reply carries the
+    // repeat state a radio change has to send back.
+    requestDeviceQuery();
 
-        DeviceInfo info;
-        r.skip(1);  // adv_type
-        info.txPowerDbm = r.i8();
-        r.skip(1);  // max tx power
-        info.pubkey = r.take(32);
-        const qint32 latE6 = r.i32();
-        const qint32 lonE6 = r.i32();
-        info.hasLocation = latE6 != 0 || lonE6 != 0;
-        info.latitude = latE6 / 1000000.0;
-        info.longitude = lonE6 / 1000000.0;
-        r.skip(4);      // multi-acks, location policy, telemetry mode, manual add
-        info.freqMhz = r.u32() / 1000.0;
-        info.bwKhz = r.u32() / 1000.0;
-        info.sf = r.u8();
-        info.cr = r.u8();
-        info.name = QString::fromUtf8(r.rest());
-        if (!r.ok()) return true;
-
-        device_ = info;
-        Q_EMIT deviceInfoChanged(device_);
-        return true;
-    });
+    // SELF_INFO is what proves the far end speaks the protocol at all, and the
+    // window needs it at once: it names the device database, which has to be
+    // open before the inbox drain at the end of this handshake.
+    requestSelfInfo([this] { Q_EMIT deviceInfoChanged(device_); });
 
     // The daemon cannot step the system clock, so it tracks an offset from
     // whatever the app tells it. Adverts are rejected as replays without a
@@ -332,6 +313,8 @@ void CompanionClient::beginHandshake() {
     Writer time(CmdSetDeviceTime);
     time.u32(quint32(QDateTime::currentSecsSinceEpoch()));
     enqueue(time.bytes());
+
+    requestTuning([this] { Q_EMIT deviceInfoChanged(device_); });
 
     // Slots are sparse and the store always reports all eight, so ask for every
     // one and keep those with a non-zero key.
@@ -341,6 +324,100 @@ void CompanionClient::beginHandshake() {
     // Behind the channels: the sidebar is what the window opens on, and the
     // address book is a screen the user has to ask for.
     requestContacts();
+}
+
+void CompanionClient::requestDeviceQuery(AbortHandler onAbort) {
+    Writer w(CmdDeviceQuery);
+    w.u8(AppProtocolVersion);
+    enqueue(
+        w.bytes(),
+        [this](quint8 code, Reader& r) {
+            // Nothing here needs the rest; an answer that is not DEVICE_INFO is
+            // left for APP_START to judge.
+            if (code != RespDeviceInfo) return true;
+            // fw_ver(1) max_contacts/2(1) max_channels(1) ble_pin(4) build(12)
+            // model(40) version(20), then upstream's v9 repeat byte. Judged by
+            // whether it is there rather than by fw_ver: coreletd claims v3 and
+            // appends it anyway, because a missing repeat byte in
+            // SET_RADIO_PARAMS turns repeat off.
+            r.skip(1 + 1 + 1 + 4 + 12 + 40 + 20);
+            if (r.ok() && r.remaining() > 0)
+                device_.repeat = r.u8() != 0;
+            else
+                device_.repeat.reset();
+            return true;
+        },
+        std::move(onAbort));
+}
+
+bool CompanionClient::parseSelfInfo(Reader& r, DeviceInfo& info) {
+    // adv_type(1) tx(1) max_tx(1) pubkey(32) lat(4) lon(4) multi-acks(1)
+    // location policy(1) telemetry mode(1) manual add(1) freq(4) bw(4) sf(1)
+    // cr(1) name
+    DeviceInfo parsed = info;
+    r.skip(1);  // adv_type
+    parsed.txPowerDbm = r.i8();
+    parsed.maxTxPowerDbm = r.u8();
+    parsed.pubkey = r.take(32);
+    const qint32 latE6 = r.i32();
+    const qint32 lonE6 = r.i32();
+    parsed.hasLocation = latE6 != 0 || lonE6 != 0;
+    parsed.latitude = latE6 / 1000000.0;
+    parsed.longitude = lonE6 / 1000000.0;
+    r.skip(4);
+    parsed.freqMhz = r.u32() / 1000.0;
+    parsed.bwKhz = r.u32() / 1000.0;
+    parsed.sf = r.u8();
+    parsed.cr = r.u8();
+    parsed.name = QString::fromUtf8(r.rest());
+    if (!r.ok()) return false;
+    info = parsed;
+    return true;
+}
+
+void CompanionClient::requestSelfInfo(std::function<void()> then, AbortHandler onAbort) {
+    // APP_START: version byte, six reserved, then the app name. Sent again to
+    // re-read the node after a settings change, since nothing else answers
+    // with SELF_INFO; both ends take a repeat as the same app saying hello.
+    Writer w(CmdAppStart);
+    w.u8(1).padded({}, 6).tail(QByteArrayLiteral("corelet"));
+    enqueue(
+        w.bytes(),
+        [this, then = std::move(then)](quint8 code, Reader& r) {
+            if (code != RespSelfInfo) {
+                // Whatever is on the other end, it is not speaking this protocol.
+                transport_->close();
+                onClosed(QStringLiteral("unexpected handshake reply"));
+                return true;
+            }
+            if (!parseSelfInfo(r, device_)) return true;
+            if (then) then();
+            return true;
+        },
+        std::move(onAbort));
+}
+
+void CompanionClient::requestTuning(std::function<void()> then, AbortHandler onAbort) {
+    Writer w(CmdGetTuningParams);
+    enqueue(
+        w.bytes(),
+        [this, then = std::move(then)](quint8 code, Reader& r) {
+            // rx_delay(4) airtime_factor(4), each in thousandths. An ERR is a
+            // far end that predates the command -- coreletd before it took
+            // settings -- and leaves the factor unknown rather than zero, which
+            // would read as no limit at all.
+            const quint32 rxDelay = r.u32();
+            const quint32 factor = r.u32();
+            if (code == RespTuningParams && r.ok()) {
+                rxDelayMilli_ = rxDelay;
+                device_.airtimeFactorMilli = int(qMin(factor, quint32(INT_MAX)));
+            } else {
+                device_.airtimeFactorMilli.reset();
+            }
+            if (then) then();
+            return true;
+        },
+        std::move(onAbort));
 }
 
 void CompanionClient::requestChannel(int index) {
@@ -429,6 +506,289 @@ void CompanionClient::sendAdvert(bool flood) {
             return true;
         },
         [this, flood] { Q_EMIT advertResult(flood, false, QStringLiteral("connection lost")); });
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The wire's units: SET_RADIO_PARAMS takes kHz and whole hertz, and
+// SELF_INFO reports the same, rounded rather than truncated -- 869.525 is a
+// hair under itself in binary.
+quint32 toKhz(double mhz) { return quint32(std::lround(mhz * 1000.0)); }
+quint32 toHz(double khz) { return quint32(std::lround(khz * 1000.0)); }
+qint32 toE6(double degrees) { return qint32(std::lround(degrees * 1000000.0)); }
+
+// A bandwidth arrives in whole hertz and the far end snaps it to one its radio
+// has -- 7800 for the SX1262's 7.81 kHz -- so what it reports back is that and
+// not what was sent. The radio's bandwidths are far enough apart that anything
+// within 1% is the same one.
+bool sameBandwidth(double a, double b) { return std::fabs(a - b) <= 0.01 * std::max(a, b); }
+
+QString radioText(double freqMhz, double bwKhz, int sf, int cr) {
+    return QStringLiteral("%1 MHz, %2 kHz, SF%3, CR%4")
+        .arg(freqMhz, 0, 'f', 3)
+        .arg(bwKhz)
+        .arg(sf)
+        .arg(cr);
+}
+
+}  // namespace
+
+void CompanionClient::applySettings(const SettingsChange& change) {
+    auto batch = std::make_shared<SettingsBatch>();
+    batch->change = change;
+    SettingsResult& result = batch->result;
+
+    QVector<Setting>& requested = batch->requested;
+    if (change.name) requested.append(Setting::Name);
+    if (change.position) requested.append(Setting::Position);
+    if (change.radio) requested.append(Setting::Radio);
+    if (change.txPowerDbm) requested.append(Setting::TxPower);
+    if (change.airtimeFactorMilli) requested.append(Setting::AirtimeFactor);
+
+    if (state_ != State::Ready) {
+        for (const Setting setting : requested)
+            result.refused.insert(setting, QStringLiteral("not connected"));
+        Q_EMIT settingsApplied(result);
+        return;
+    }
+
+    const auto queue = [this, batch](Setting setting, const QByteArray& payload) {
+        enqueue(
+            payload,
+            [this, batch, setting](quint8 code, Reader& r) {
+                settleSetting(batch, setting, code, r);
+                return true;
+            },
+            [this, batch] { abortSettings(batch); });
+    };
+    bool sent = false;
+
+    // The name and the position share the advert's 32 bytes, and the far end
+    // checks each against the other as it stands when the command arrives. So
+    // a position going away goes first, leaving the name the room it is about
+    // to need; otherwise the name goes first, and is held to the room it will
+    // have beside the position that follows it.
+    const bool positionAfter = change.position ? change.position->advertised : device_.hasLocation;
+    const bool positionFirst = change.position && !change.position->advertised;
+
+    const auto sendPosition = [&] {
+        const SettingsChange::Position& p = *change.position;
+        // Written so that a NaN fails it too.
+        if (p.advertised && !(std::abs(p.latitude) <= 90.0 && std::abs(p.longitude) <= 180.0)) {
+            result.refused.insert(Setting::Position, QStringLiteral("not a position on Earth"));
+            return;
+        }
+        const qint32 lat = p.advertised ? toE6(p.latitude) : 0;
+        const qint32 lon = p.advertised ? toE6(p.longitude) : 0;
+        if (p.advertised && lat == 0 && lon == 0) {
+            result.refused.insert(Setting::Position,
+                                  QStringLiteral("0, 0 is how the node is told to stop "
+                                                 "advertising a position"));
+            return;
+        }
+        // lat(4) lon(4), in millionths of a degree.
+        Writer w(CmdSetAdvertLatLon);
+        w.u32(quint32(lat)).u32(quint32(lon));
+        queue(Setting::Position, w.bytes());
+        sent = true;
+    };
+
+    if (change.position && positionFirst) sendPosition();
+
+    if (change.name) {
+        const QByteArray bytes = change.name->toUtf8();
+        const int budget = maxAdvertNameBytes(positionAfter);
+        if (bytes.isEmpty()) {
+            result.refused.insert(Setting::Name, QStringLiteral("a node needs a name"));
+        } else if (bytes.size() > budget) {
+            // Refused rather than cut, as coreletd refuses it: a name nobody
+            // chose is worse than the one already there.
+            result.refused.insert(
+                Setting::Name,
+                QStringLiteral("the name needs %1 bytes and the advert holds %2%3")
+                    .arg(bytes.size())
+                    .arg(budget)
+                    .arg(positionAfter ? QStringLiteral(" beside a position") : QString()));
+        } else {
+            // The rest of the frame is the name; nothing terminates it.
+            Writer w(CmdSetAdvertName);
+            w.tail(bytes);
+            queue(Setting::Name, w.bytes());
+            sent = true;
+        }
+    }
+
+    if (change.position && !positionFirst) sendPosition();
+
+    if (change.radio) {
+        const SettingsChange::Radio& radio = *change.radio;
+        const bool usable = radio.freqMhz >= MinFreqMhz && radio.freqMhz <= MaxFreqMhz &&
+                            radio.bwKhz >= 7.0 && radio.bwKhz <= 500.0 && radio.sf >= 5 &&
+                            radio.sf <= 12 && radio.cr >= 5 && radio.cr <= 8;
+        if (!usable) {
+            result.refused.insert(Setting::Radio, QStringLiteral("not settings a radio can use"));
+        } else if (radio.repeat && !repeatAllowedAt(toKhz(radio.freqMhz))) {
+            result.refused.insert(Setting::Radio,
+                                  QStringLiteral("repeat is only allowed at 433.000, 869.495 "
+                                                 "and 918.000 MHz"));
+        } else {
+            // freq(4) in kHz, bw(4) in Hz, sf(1), cr(1), repeat(1). The last
+            // byte always goes, whatever the far end claims to understand: an
+            // absent one turns repeat off, so a preset change that left it out
+            // would quietly stop the node relaying.
+            Writer w(CmdSetRadioParams);
+            w.u32(toKhz(radio.freqMhz))
+                .u32(toHz(radio.bwKhz))
+                .u8(quint8(radio.sf))
+                .u8(quint8(radio.cr))
+                .u8(radio.repeat ? 1 : 0);
+            queue(Setting::Radio, w.bytes());
+            sent = true;
+        }
+    }
+
+    if (change.txPowerDbm) {
+        const int dbm = *change.txPowerDbm;
+        const int ceiling = std::max(device_.maxTxPowerDbm, device_.txPowerDbm);
+        if (dbm < MinTxPowerDbm || dbm > ceiling) {
+            result.refused.insert(Setting::TxPower,
+                                  QStringLiteral("the radio takes %1 to %2 dBm")
+                                      .arg(MinTxPowerDbm)
+                                      .arg(ceiling));
+        } else {
+            // A signed byte, as both ends read it.
+            Writer w(CmdSetRadioTxPower);
+            w.u8(quint8(qint8(dbm)));
+            queue(Setting::TxPower, w.bytes());
+            sent = true;
+        }
+    }
+
+    if (change.airtimeFactorMilli) {
+        const int factor = *change.airtimeFactorMilli;
+        if (factor < 0 || factor > MaxAirtimeFactorMilli) {
+            result.refused.insert(Setting::AirtimeFactor,
+                                  QStringLiteral("the airtime factor runs from 0 to 9"));
+        } else {
+            // rx_delay(4) airtime_factor(4), each in thousandths.
+            Writer w(CmdSetTuningParams);
+            w.u32(rxDelayMilli_).u32(quint32(factor));
+            queue(Setting::AirtimeFactor, w.bytes());
+            sent = true;
+        }
+    }
+
+    if (!sent) {
+        batch->finished = true;
+        Q_EMIT settingsApplied(result);
+        return;
+    }
+
+    // Read back everything a change can have touched. The node is the
+    // authority on what it is now running, so what the app shows comes from
+    // here rather than from what it asked for.
+    const AbortHandler abort = [this, batch] { abortSettings(batch); };
+    requestDeviceQuery(abort);
+    requestSelfInfo({}, abort);
+    requestTuning([this, batch] { finishSettings(batch); }, abort);
+}
+
+void CompanionClient::settleSetting(const std::shared_ptr<SettingsBatch>& batch,
+                                    Setting setting, quint8 code, Reader& r) {
+    batch->answered.insert(setting);
+    switch (code) {
+        case RespOk:
+            batch->accepted.insert(setting);
+            break;
+        case RespDisabled:
+            // The node's own policy rather than anything wrong with the value:
+            // an older coreletd answers every setter this way, and an operator
+            // can turn them off. Remembered so the settings show read-only.
+            batch->result.disabled = true;
+            device_.settingsDisabled = true;
+            break;
+        case RespErr:
+            batch->result.refused.insert(setting, errorText(r.u8()));
+            break;
+        default:
+            batch->result.refused.insert(setting, QStringLiteral("unexpected reply"));
+            break;
+    }
+}
+
+void CompanionClient::finishSettings(const std::shared_ptr<SettingsBatch>& batch) {
+    if (batch->finished) return;
+    batch->finished = true;
+
+    const SettingsChange& change = batch->change;
+    SettingsResult& result = batch->result;
+    const auto unlike = [&](Setting setting, const QString& reported) {
+        result.refused.insert(setting,
+                              QStringLiteral("accepted, but the node reports %1").arg(reported));
+    };
+
+    if (batch->accepted.contains(Setting::Name) && device_.name != *change.name)
+        unlike(Setting::Name, QStringLiteral("\"%1\"").arg(device_.name));
+
+    if (batch->accepted.contains(Setting::Position)) {
+        const SettingsChange::Position& p = *change.position;
+        const bool same = p.advertised ? device_.hasLocation &&
+                                             toE6(device_.latitude) == toE6(p.latitude) &&
+                                             toE6(device_.longitude) == toE6(p.longitude)
+                                       : !device_.hasLocation;
+        if (!same)
+            unlike(Setting::Position,
+                   device_.hasLocation ? QStringLiteral("%1, %2")
+                                             .arg(device_.latitude, 0, 'f', 6)
+                                             .arg(device_.longitude, 0, 'f', 6)
+                                       : QStringLiteral("no position"));
+    }
+
+    if (batch->accepted.contains(Setting::Radio)) {
+        const SettingsChange::Radio& radio = *change.radio;
+        if (toKhz(device_.freqMhz) != toKhz(radio.freqMhz) ||
+            !sameBandwidth(device_.bwKhz, radio.bwKhz) || device_.sf != radio.sf ||
+            device_.cr != radio.cr)
+            unlike(Setting::Radio, radioText(device_.freqMhz, device_.bwKhz, device_.sf,
+                                             device_.cr));
+        else if (device_.repeat && *device_.repeat != radio.repeat)
+            unlike(Setting::Radio, *device_.repeat ? QStringLiteral("repeat still on")
+                                                   : QStringLiteral("repeat still off"));
+    }
+
+    if (batch->accepted.contains(Setting::TxPower) && device_.txPowerDbm != *change.txPowerDbm)
+        unlike(Setting::TxPower, QStringLiteral("%1 dBm").arg(device_.txPowerDbm));
+
+    if (batch->accepted.contains(Setting::AirtimeFactor) &&
+        device_.airtimeFactorMilli != change.airtimeFactorMilli)
+        unlike(Setting::AirtimeFactor,
+               device_.airtimeFactorMilli
+                   ? QStringLiteral("an airtime factor of %1")
+                         .arg(*device_.airtimeFactorMilli / 1000.0)
+                   : QStringLiteral("no airtime factor"));
+
+    for (const Setting setting : std::as_const(batch->accepted))
+        if (!result.refused.contains(setting)) result.applied.insert(setting);
+
+    Q_EMIT deviceInfoChanged(device_);
+    Q_EMIT settingsApplied(result);
+}
+
+void CompanionClient::abortSettings(const std::shared_ptr<SettingsBatch>& batch) {
+    if (batch->finished) return;
+    batch->finished = true;
+    // Whatever was refused stands. Whatever was accepted was never read back,
+    // and whatever was not answered may or may not have reached the node;
+    // there is no link left to ask about either, so neither counts as applied,
+    // and the next handshake reads the node afresh.
+    for (const Setting setting : batch->requested)
+        if (!batch->answered.contains(setting) && !batch->result.refused.contains(setting))
+            batch->result.refused.insert(setting, QStringLiteral("connection lost"));
+    Q_EMIT settingsApplied(batch->result);
 }
 
 // ---------------------------------------------------------------------------

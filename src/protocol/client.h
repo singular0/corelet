@@ -1,10 +1,13 @@
 #pragma once
 
+#include <QMap>
 #include <QObject>
 #include <QQueue>
 #include <QSet>
 #include <QVector>
 #include <functional>
+#include <memory>
+#include <optional>
 
 #include "model/types.h"
 #include "protocol/frame_codec.h"
@@ -42,16 +45,77 @@ public:
         // SELF_INFO uses 0,0 to mean that the node does not advertise a
         // location, so coordinates need a presence bit of their own.
         bool hasLocation = false;
+        // Zero until something has chosen one: a fresh coreletd starts
+        // radio-silent and transmits nothing until an app sends it a preset.
         double freqMhz = 0;
         double bwKhz = 0;
         int sf = 0;
         int cr = 0;
         int txPowerDbm = 0;
+        // The radio's ceiling as SELF_INFO reports it, which is what bounds a
+        // power the app offers.
+        int maxTxPowerDbm = 0;
+        // Whether the node relays other nodes' traffic, from the byte DEVICE_INFO
+        // appends past its fixed fields. Empty when nothing is appended, which is
+        // firmware that predates repeat altogether. SET_RADIO_PARAMS without
+        // that byte turns repeat off, so this is also what a radio change has to
+        // send back to leave it as it is.
+        std::optional<bool> repeat;
+        // GET_TUNING_PARAMS' airtime factor, in the thousandths the wire carries:
+        // the node keeps quiet for af times each transmission's airtime, a duty
+        // cycle of 100 / (1 + af) percent. Empty when the far end does not
+        // answer the command.
+        std::optional<int> airtimeFactorMilli;
+        // Set once the far end answers a settings change with RESP_DISABLED: it
+        // takes none from an app. Nothing reveals that short of trying, so it is
+        // learned from the first refusal and lasts the session.
+        bool settingsDisabled = false;
         // GET_BATTERY_VOLTAGE supplies millivolts rather than charge state. The
         // client retains both the raw reading and the percentage the UI needs;
         // -1 means the far end has no battery reading.
         int batteryMillivolts = -1;
         int batteryPercent = -1;
+    };
+
+    // What the settings screen can change, one member per command; only those
+    // present are sent. Units are DeviceInfo's, so a field read from there and
+    // handed back unchanged means the same thing on the wire.
+    struct SettingsChange {
+        struct Position {
+            // Off is 0,0 on the wire, which is how the node is told to stop.
+            bool advertised = false;
+            double latitude = 0;
+            double longitude = 0;
+        };
+        // The preset and repeat together, because the wire carries them in one
+        // command and an absent repeat byte means off.
+        struct Radio {
+            double freqMhz = 0;
+            double bwKhz = 0;
+            int sf = 0;
+            int cr = 0;
+            bool repeat = false;
+        };
+        std::optional<QString> name;
+        std::optional<Position> position;
+        std::optional<Radio> radio;
+        std::optional<int> txPowerDbm;
+        std::optional<int> airtimeFactorMilli;
+    };
+
+    enum class Setting { Name, Position, Radio, TxPower, AirtimeFactor };
+
+    struct SettingsResult {
+        // What the node accepted and then reported back as asked.
+        QSet<Setting> applied;
+        // Why each change that did not take failed. A change the node said yes
+        // to and then does not report is in here too: the re-read is the only
+        // thing believed, and an older daemon answered OK to a power change it
+        // ignored.
+        QMap<Setting, QString> refused;
+        // The far end answered RESP_DISABLED, so it takes no settings from an
+        // app at all. Not counted in `refused`: nothing went wrong.
+        bool disabled = false;
     };
 
     explicit CompanionClient(QObject* parent = nullptr);
@@ -109,6 +173,17 @@ public:
     // answer says the node took it for transmission, which is as much as
     // anything can say about a broadcast nobody acknowledges.
     void sendAdvert(bool flood);
+
+    // Changes the node's own settings, then reads them back. Nothing is assumed
+    // to have taken effect: deviceInfoChanged() carries what the node reports
+    // afterwards, and settingsApplied() follows it with anything that did not
+    // take, including what the node accepted and does not show.
+    //
+    // A name over maxAdvertNameBytes() for the position it will sit beside is
+    // refused rather than cut, as is anything else outside what the command
+    // allows -- repeat at a frequency it is not permitted at above all, which
+    // the far end would refuse along with the frequency itself.
+    void applySettings(const SettingsChange& change);
 
     // Empties a slot. There is no delete command: a slot with an all-zero key is
     // what "unused" means on the wire, so removing a channel is a SET_CHANNEL
@@ -170,6 +245,9 @@ Q_SIGNALS:
     // Answer to clearChannel(), likewise emitted after channelsChanged() so a
     // listener sees the slot already gone from the list.
     void channelRemoveResult(int channelIndex, bool ok, const QString& error);
+    // Answer to applySettings(). Exactly one arrives per call, including when
+    // the link dies partway, and after the deviceInfoChanged() of the re-read.
+    void settingsApplied(const SettingsResult& result);
 
 private Q_SLOTS:
     void onOpened();
@@ -199,6 +277,13 @@ private:
     void handlePush(quint8 code, Reader& r);
 
     void beginHandshake();
+    // The three reads a handshake and a settings re-read share. Each updates
+    // device_ without announcing it, so a caller emits once for the lot;
+    // `then` runs after the reply, `onAbort` instead of it.
+    void requestDeviceQuery(AbortHandler onAbort = {});
+    void requestSelfInfo(std::function<void()> then, AbortHandler onAbort = {});
+    void requestTuning(std::function<void()> then, AbortHandler onAbort = {});
+    static bool parseSelfInfo(Reader& r, DeviceInfo& info);
     void requestBattery();
     void requestChannel(int index);
     // The contact stream: CONTACTS_START, a CONTACT per node, END_OF_CONTACTS.
@@ -244,6 +329,23 @@ private:
     void setState(State s, const QString& detail = {});
     void resetConnection();
 
+    // One applySettings() call, shared by the handlers of every command it
+    // queued so that whichever finishes it reports once.
+    struct SettingsBatch {
+        SettingsChange change;
+        QVector<Setting> requested;
+        SettingsResult result;
+        // Every setting the far end has answered for, and those it said yes to.
+        QSet<Setting> answered;
+        QSet<Setting> accepted;
+        bool finished = false;
+    };
+    void settleSetting(const std::shared_ptr<SettingsBatch>& batch, Setting setting,
+                       quint8 code, Reader& r);
+    // Holds what the node reports now against what it accepted, then reports.
+    void finishSettings(const std::shared_ptr<SettingsBatch>& batch);
+    void abortSettings(const std::shared_ptr<SettingsBatch>& batch);
+
     // Shared tail parsing for both V3 message shapes.
     model::Message parseMessageTail(Reader& r, qint8 snrQ4, int channelIndex);
 
@@ -267,6 +369,11 @@ private:
 
     State state_ = State::Disconnected;
     DeviceInfo device_;
+    // GET_TUNING_PARAMS' other half. Nothing shows it, but SET_TUNING_PARAMS
+    // carries it beside the airtime factor, and upstream firmware stores
+    // whatever arrives: sending back what was read keeps a delay somebody set
+    // elsewhere, and is the 0 coreletd insists on when talking to coreletd.
+    quint32 rxDelayMilli_ = 0;
     QVector<model::Channel> channels_;
     int channelsOutstanding_ = 0;
     QVector<model::Contact> contacts_;

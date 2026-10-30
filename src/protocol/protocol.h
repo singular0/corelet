@@ -19,11 +19,16 @@ enum Cmd : quint8 {
     CmdSendSelfAdvert = 7,
     CmdSetAdvertName = 8,
     CmdSyncNextMessage = 10,
+    CmdSetRadioParams = 11,
+    CmdSetRadioTxPower = 12,
+    CmdSetAdvertLatLon = 14,
     CmdGetBatteryVoltage = 20,
+    CmdSetTuningParams = 21,
     CmdDeviceQuery = 22,
     CmdGetContactByKey = 30,
     CmdGetChannel = 31,
     CmdSetChannel = 32,
+    CmdGetTuningParams = 43,
 };
 
 enum Resp : quint8 {
@@ -46,6 +51,7 @@ enum Resp : quint8 {
     RespContactMsgRecvV3 = 16,
     RespChannelMsgRecvV3 = 17,
     RespChannelInfo = 18,
+    RespTuningParams = 23,
 };
 
 enum Push : quint8 {
@@ -92,6 +98,39 @@ inline constexpr int ContactNameField = 32;
 inline constexpr int ContactPathField = 64;
 
 inline constexpr quint8 TxtPlain = 0;
+
+// What this app tells DEVICE_QUERY it understands. Upstream firmware frames a
+// received message in the V3 shape -- the only one parsed here -- only for an
+// app that has said 3 or more, and decides when the message arrives, not when
+// it is collected.
+inline constexpr quint8 AppProtocolVersion = 3;
+
+// The bounds SET_RADIO_PARAMS itself puts on a centre frequency, in MHz.
+// coreletd's SX1262 stops at 960; upstream firmware also drives 2.4 GHz radios,
+// so the command's own range is the honest one here and the far end refuses
+// what its radio cannot tune.
+inline constexpr double MinFreqMhz = 150.0;
+inline constexpr double MaxFreqMhz = 2500.0;
+
+// The only centre frequencies at which an app may turn repeat on, in kHz as
+// SET_RADIO_PARAMS carries them: upstream's repeat_freq_ranges, which coreletd
+// mirrors. Anywhere else the whole command is refused, frequency and all.
+inline constexpr quint32 RepeatFreqsKhz[] = {433000, 869495, 918000};
+
+constexpr bool repeatAllowedAt(quint32 freqKhz) {
+    for (const quint32 allowed : RepeatFreqsKhz)
+        if (allowed == freqKhz) return true;
+    return false;
+}
+
+// SET_RADIO_TX_POWER's floor, the same on both ends. The ceiling is the
+// radio's and SELF_INFO reports it.
+inline constexpr int MinTxPowerDbm = -9;
+
+// SET_TUNING_PARAMS carries the airtime factor in thousandths, and both ends
+// hold it to 0-9: the node keeps quiet for that many times the airtime of each
+// transmission, so the duty cycle is 100 / (1 + af) percent.
+inline constexpr int MaxAirtimeFactorMilli = 9000;
 
 // The hash a direct message's recipient answers with, carried by RESP_SENT and
 // handed back by PUSH_SEND_CONFIRMED. Four bytes is short enough to collide --

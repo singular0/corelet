@@ -42,6 +42,20 @@ inline constexpr int SenderSeparatorBytes = 2;  // the ": " between name and bod
 // it, so the whole budget is the body and it does not move with the node's name.
 inline constexpr int MaxDirectTextBytes = MaxChannelTextBytes;
 
+// A node's name rides in its advert, whose app data MeshCore verifies as at most
+// 32 bytes: a flags byte, then latitude and longitude (four bytes each) when a
+// position is advertised, then the name with nothing after it. coreletd refuses
+// a name that does not fit rather than cut it -- a cut advert fails signature
+// verification on every node that hears it -- so the budget depends on whether
+// a position goes with it.
+inline constexpr int AdvertAppDataBytes = 32;
+inline constexpr int AdvertPositionBytes = 8;
+inline constexpr int MaxAdvertNameBytes = AdvertAppDataBytes - 1;
+
+inline int maxAdvertNameBytes(bool withPosition) {
+    return MaxAdvertNameBytes - (withPosition ? AdvertPositionBytes : 0);
+}
+
 inline int utf8Bytes(const QString& text) { return int(text.toUtf8().size()); }
 
 // Room for the body of a channel message sent under `senderName`. Clamped at

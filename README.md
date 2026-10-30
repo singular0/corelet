@@ -42,14 +42,15 @@ Unchecked boxes are not implemented yet — use another client or the daemon for
 **Your node**
 
 - [x] A node pane with its name, what you are connected to, and battery level.
-- [x] A node info panel with the public key, position and radio settings.
+- [x] A node configuration window with the public key and battery level, where you change the
+      node's name, position, region preset, radio settings, transmit power, duty cycle and repeat.
+      A node that has no frequency yet asks for a region when you connect.
 - [x] A contacts window: everyone the node has heard from, with their public key, when their last
       advert arrived and how far it travelled — and the place you pick somebody to message.
 - [x] Advertise on demand, so a node that has just come up does not have to wait for its advert
       timer before anybody can reach it. Choose whether repeaters pass it on or only nodes in
       direct range hear it.
 - [ ] Telemetry.
-- [ ] Changing device settings.
 
 **Connection**
 

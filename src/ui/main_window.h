@@ -62,6 +62,14 @@ private:
     // is in flight: the command queues behind whatever else is on the link, and
     // a broadcast that nobody answers has no other sign of having happened.
     void requestAdvert(bool flood);
+    // The node's details and settings, in the one window that both shows and
+    // changes them.
+    void showNodeConfig();
+    // Changing the name or the position sends nothing on its own, so the mesh
+    // goes on knowing the old ones until the advert timer fires -- which may be
+    // off. Asked rather than done, because an advert is airtime and which reach
+    // it should have is a choice.
+    void offerAdvert();
     // The add button's menu: a direct conversation, then one item per kind of
     // channel, since which kind is being added is settled before any of them
     // has a field to fill in.
@@ -201,6 +209,10 @@ private:
     // One preflight per handshake. Reset whenever the link leaves Ready, which
     // is the only thing that gives storage another chance.
     bool storagePreflighted_ = false;
+    // Whether this target has already been asked for a radio preset. Once per
+    // target chosen, not per handshake: a link that keeps dropping would
+    // otherwise reopen the window every time it came back.
+    bool presetPrompted_ = false;
     bool contactsSyncing_ = false;
     bool messagesSyncing_ = false;
 

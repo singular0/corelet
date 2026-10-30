@@ -79,6 +79,7 @@ add_executable(corelet
     src/ui/add_channel_dialogs.cpp
     src/ui/share_channel_dialog.cpp
     src/ui/contacts_dialog.cpp
+    src/ui/node_config_dialog.cpp
     src/ui/node_pane.cpp
     src/ui/main_window.cpp
 )
@@ -207,6 +208,23 @@ if(BUILD_TESTING)
         target_compile_options(send-ack-test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME send-ack-test COMMAND send-ack-test)
+
+    # Changing the node's settings, over a fake node of its own for the same
+    # reason as above: what matters is what reaches the wire and what is
+    # believed afterwards, and a real node would have to be reconfigured to
+    # find out.
+    add_executable(node-settings-test
+        tests/node_settings_test.cpp
+        src/protocol/transport.h
+        src/protocol/client.cpp
+        src/protocol/frame_codec.cpp)
+    target_include_directories(node-settings-test PRIVATE src)
+    target_link_libraries(node-settings-test PRIVATE Qt6::Core)
+    target_compile_definitions(node-settings-test PRIVATE QT_NO_KEYWORDS)
+    if(NOT MSVC)
+        target_compile_options(node-settings-test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME node-settings-test COMMAND node-settings-test)
 
     # Header-only rules, so nothing of the app is compiled in beside the test.
     add_executable(text-limits-test tests/text_limits_test.cpp)

@@ -38,20 +38,22 @@ Q_SIGNALS:
     // Speak up, so the mesh learns this node is here. `flood` is how far it is
     // to carry: through repeaters, or only to whoever is in direct range.
     void advertRequested(bool flood);
+    // The node's own details and settings. Changing them takes the client,
+    // which the pane does not hold, so the window is the owner's to open.
+    void configRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    void showDeviceInfo();
     void showAdvertMenu();
     void updateBatteryDisplay();
     void updateConnectionAction(bool active);
 
     QToolButton* advertButton_ = nullptr;
     QToolButton* contactsButton_ = nullptr;
-    QToolButton* infoButton_ = nullptr;
+    QToolButton* configButton_ = nullptr;
     QToolButton* connectionButton_ = nullptr;
     QWidget* batteryRow_ = nullptr;
     QWidget* statusRow_ = nullptr;

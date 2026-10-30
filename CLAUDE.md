@@ -9,18 +9,19 @@ each other.
 
 ## Build
 
-Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are five CTest binaries
+Qt 6 Widgets, C++20, no dependencies beyond Qt. No formatter config. Tests are six CTest binaries
 built under `BUILD_TESTING` (`tests/history_test.cpp`, `tests/chat_model_test.cpp`,
-`tests/conversation_model_test.cpp`, `tests/send_ack_test.cpp`, `tests/text_limits_test.cpp`) plus
+`tests/conversation_model_test.cpp`, `tests/send_ack_test.cpp`, `tests/node_settings_test.cpp`,
+`tests/text_limits_test.cpp`) plus
 `tests/version_test.cmake`, which drives the version resolver over throwaway repositories rather
 than compiling anything; run them with `ctest --test-dir build`. They link only what they exercise
 and never Qt6::Test — nothing here needs a test framework, and adding one would put a dependency in
 `debian/control` for the sake of `QSignalSpy`. `libqt6sql6-sqlite` is a Build-Depend as well as a runtime one because
 the history test opens a real QSQLITE database and `dh_auto_test` fails without the driver plugin.
-The send-ack test drives `CompanionClient` over a fake `Transport` of its own and links no real
-one, which is why it needs neither Network nor Bluetooth; `src/protocol/transport.h` is listed in
-its sources because AUTOMOC has nothing else to generate the interface's metaobject from. It is
-also the one test that waits on wall-clock time — a lapsed ack window is a timer firing — so it
+The send-ack and node-settings tests each drive `CompanionClient` over a fake `Transport` of their
+own and link no real one, which is why they need neither Network nor Bluetooth;
+`src/protocol/transport.h` is listed in their sources because AUTOMOC has nothing else to generate
+the interface's metaobject from. The send-ack test is also the one that waits on wall-clock time — a lapsed ack window is a timer firing — so it
 runs for a couple of seconds where the others are instant.
 
 ```sh
@@ -179,9 +180,9 @@ Three layers under `src/`, strictly one-directional (`ui` → `model` → `proto
 - **`model/`** — `Channel`/`Contact`/`Conversation`/`Message` value types, the SQLite `History`,
   and three `QAbstractListModel`s (`ConversationModel` for the sidebar, `ChatModel` for the open
   conversation, `ContactModel` for the address book).
-- **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, `NodePane`, the
-  add/share channel and contacts dialogs (the last doubling as the peer picker for a new direct
-  conversation, so the two never drift), three item delegates, the dark `theme`, and SVG icons in
+- **`ui/`** — `MainWindow` wires client signals to models, plus `ConnectDialog`, `NodePane`,
+  `NodeConfigDialog`, the add/share channel and contacts dialogs (the last doubling as the peer
+  picker for a new direct conversation, so the two never drift), three item delegates, the dark `theme`, and SVG icons in
   a `.qrc` (Lucide, ISC — some derived from Feather and also MIT; see `src/ui/icons/LICENSE` and
   `debian/copyright`, which are what the README's license section points at). Anything two lists
   have to say the same way is shared rather than copied: `row_format.h` for a last-heard stamp and
@@ -197,6 +198,11 @@ This is a client only. All radio work, crypto and channel state live in `corelet
 
 Violating any of these produces bugs that only show up against a real device:
 
+- **`DEVICE_QUERY` opens the handshake**, before `APP_START`, carrying the protocol version the
+  app understands. Upstream firmware frames a received message in the V3 shape — the only one
+  parsed here — only once an app has said 3 or more, and decides when the message arrives rather
+  than when it is collected; the reply also carries the repeat byte a radio change has to send
+  back.
 - **Replies are untagged.** Nothing in a response identifies the command it answers, so exactly one
   command is in flight at a time and the rest queue in `CompanionClient::pump`. Never send two
   commands concurrently and match replies by shape.
@@ -255,6 +261,35 @@ Violating any of these produces bugs that only show up against a real device:
   report every message unconfirmed as it left. The ack is four bytes and the firmware says outright
   that the same one can arrive twice, so it is matched against this session's sends and never
   treated as an identity.
+- **A settings change is believed from the re-read, never from the `RESP_OK`.**
+  `CompanionClient::applySettings` sends only the commands whose values differ, then re-reads the
+  node — `DEVICE_QUERY`, `APP_START` again (nothing else answers with `SELF_INFO`, and both ends
+  take a repeat as the same app saying hello) and `GET_TUNING_PARAMS` — and holds what the node
+  now reports against what it accepted. That is not caution for its own sake: an older coreletd
+  answered OK to a TX power change it ignored. `RESP_DISABLED` is a node that takes no settings
+  from an app at all (an older coreletd answers every setter that way), so it is remembered in
+  `DeviceInfo::settingsDisabled` and the window turns read-only rather than reporting failures.
+- **`SET_RADIO_PARAMS` always carries its trailing repeat byte.** Upstream and coreletd both read a
+  missing one as *off*, even though coreletd claims protocol v3 and a v3 client has no reason to
+  send it, so a preset change that left it out would quietly stop the node relaying. The current
+  state comes from the byte `DEVICE_INFO` appends past its fixed fields, judged by whether it is
+  there rather than by the version coreletd claims. Both ends refuse the whole command when it
+  turns repeat on anywhere but 433.000, 869.495 or 918.000 MHz (`proto::RepeatFreqsKhz`), so that
+  is checked before sending.
+- **The name and the position share the advert's 32 bytes**: a flags byte, eight bytes of position
+  when one is advertised, then the name — 31 bytes alone, 23 beside a position
+  (`proto::maxAdvertNameBytes`). coreletd refuses a name that does not fit rather than cut it, and
+  checks each command against the other as it stands when it arrives, so a position going away is
+  sent before the name that needs the room, and otherwise the name goes first.
+- **`SET_TUNING_PARAMS` sends back the RX delay `GET_TUNING_PARAMS` reported** beside the airtime
+  factor. coreletd refuses anything but 0 and reports 0; upstream stores whatever arrives, so
+  sending a constant 0 would wipe a delay set from another app.
+- **Radio presets are the app's, as in MeshCore.** Neither the firmware nor coreletd has a band
+  plan, and a fresh coreletd reports 0 MHz and stays radio-silent until an app sends one.
+  `model/radio_presets.h` is a copy of the official app's list, from `suggested_radio_settings` in
+  `https://api.meshcore.nz/api/v1/config`, with its titles and order — copied rather than invented,
+  and not fetched at runtime because the uConsole is as often off a network as on one. Refresh it
+  from there, and say when in the comment above it.
 - **Only framing differs between links.** `Transport` hides it: the two stream links length-prefix
   and de-frame incrementally, BLE is one Nordic UART write/notification per frame. Everything above
   `Transport` is link-agnostic; don't add transport branches to `CompanionClient`.
@@ -421,6 +456,17 @@ tight lines rather than the three a desktop client would spend.
   addressed to everybody, so nothing acknowledges it and there is no delivery to wait for, unlike
   a direct send. The button sits at the head of the header rather than beside Connect: it is the
   one action there that puts something on the air, and the uConsole's input is a trackball.
+- The node header's gear opens `NodeConfigDialog`, which is the node's information window and its
+  settings at once: every value somebody can change there is also one they open it to read, and
+  two windows showing the same name and frequency would drift. Its two columns, node and radio,
+  sit side by side because the panel is short and wide. A Save sends only what differs and then
+  shows what the node reports; a change that did not take keeps what was typed, so it can be put
+  right rather than retyped. A preset that the fields still match stays chosen even where another
+  preset is identical — somebody who picked Brazil should not see it turn into Australia. The
+  window opens on its own when a node reports no frequency, once per target chosen rather than per
+  handshake, so a flapping link does not keep reopening it. Neither a name nor a position change
+  advertises anything, as in MeshCore, so after one the window's owner offers an advert, with Not
+  Now as the default: an advert is airtime.
 - Every field with a byte budget carries a `ByteLimit` (`ui/byte_limit.h`), which is what
   `QLineEdit::setMaxLength` would be if it counted encoded bytes instead of characters — the whole
   reason it exists, since the same 32-byte field holds 32 Latin letters, 16 Cyrillic ones or 8

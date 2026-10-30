@@ -33,6 +33,7 @@
 #include "ui/icons.h"
 #include "ui/menu_button.h"
 #include "ui/message_delegate.h"
+#include "ui/node_config_dialog.h"
 #include "ui/node_pane.h"
 #include "ui/share_channel_dialog.h"
 #include "ui/theme.h"
@@ -223,6 +224,7 @@ void MainWindow::connectTo(const proto::ConnectTarget& target) {
     // persisted state until SELF_INFO supplies the new public key.
     activeDeviceId_.clear();
     pendingChannelRemovals_.clear();
+    presetPrompted_ = false;
     current_ = {};
     // The new session preflights its own database, and that is what decides
     // whether there is still a fault to report.
@@ -275,6 +277,86 @@ void MainWindow::onAdvertResult(bool flood, bool ok, const QString& error) {
     showNotice(flood ? QStringLiteral("Advert sent to the mesh")
                      : QStringLiteral("Advert sent to nodes in direct range"),
                5000);
+}
+
+void MainWindow::showNodeConfig() {
+    // The node pane keeps its button disabled without a link and an identity;
+    // the prompt for a preset arrives here through the event loop, by which
+    // time either may be gone.
+    if (client_->state() != proto::CompanionClient::State::Ready ||
+        client_->device().pubkey.size() != 32)
+        return;
+
+    NodeConfigDialog dialog(client_, this);
+    // Accepted is a save in which everything took. A save that partly failed
+    // said so in the window, and leaves nothing to add here.
+    if (dialog.exec() == QDialog::Accepted)
+        showNotice(QStringLiteral("Node configuration saved"), 5000);
+    if (dialog.advertChanged()) offerAdvert();
+}
+
+void MainWindow::offerAdvert() {
+    QDialog dialog(this);
+    ui::configureDialogWindow(dialog);
+    dialog.setWindowTitle(QStringLiteral("Advertise"));
+
+    const int iconSize = theme::scaled(dialog.font(), 40);
+    auto* icon = new QLabel;
+    icon->setPixmap(icons::tinted(QStringLiteral("megaphone"), iconSize, theme::Accent,
+                                  devicePixelRatioF()));
+    icon->setFixedSize(iconSize, iconSize);
+    icon->setAlignment(Qt::AlignTop);
+
+    auto* content = new QLabel(
+        QStringLiteral("<p style=\"margin: 0;\">Advertise the change now?</p>"
+                       "<p style=\"margin-top: 8px; margin-bottom: 0; color: %1;\">Other "
+                       "nodes keep the old name and position until this node next "
+                       "advertises.</p>")
+            .arg(theme::TextMuted.name()));
+    content->setTextFormat(Qt::RichText);
+    content->setWordWrap(true);
+    content->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+
+    auto* bodyLayout = new QHBoxLayout;
+    bodyLayout->addWidget(icon, 0, Qt::AlignTop);
+    bodyLayout->addWidget(content, 1, Qt::AlignTop);
+
+    // The same two reaches as the header's advert menu, in the same words.
+    // Not now is the default: an advert is airtime, and a slip of the trackball
+    // should not flood the mesh.
+    auto* later = new QPushButton(QStringLiteral("Not Now"));
+    later->setDefault(true);
+    auto* neighbours = new QPushButton(QStringLiteral("Advertise to Neighbours"));
+    neighbours->setToolTip(QStringLiteral("Zero hop: only nodes in direct radio range hear it"));
+    auto* mesh = new QPushButton(QStringLiteral("Advertise to the Mesh"));
+    mesh->setToolTip(
+        QStringLiteral("Repeaters pass it on, so nodes out of direct range hear it too"));
+
+    auto* buttonLayout = new QHBoxLayout;
+    buttonLayout->setSpacing(6);
+    buttonLayout->addStretch(1);
+    buttonLayout->addWidget(later);
+    buttonLayout->addWidget(neighbours);
+    buttonLayout->addWidget(mesh);
+
+    auto* dialogLayout = new QVBoxLayout(&dialog);
+    dialogLayout->setContentsMargins(20, 16, 20, 16);
+    dialogLayout->setSpacing(12);
+    dialogLayout->addLayout(bodyLayout);
+    dialogLayout->addLayout(buttonLayout);
+    ui::lockDialogSize(dialog, *dialogLayout, 500);
+
+    // done() codes rather than accept/reject: there are two ways to say yes.
+    enum Choice { Neighbours = 2, Mesh = 3 };
+    connect(later, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(neighbours, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(Neighbours); });
+    connect(mesh, &QPushButton::clicked, &dialog, [&dialog] { dialog.done(Mesh); });
+
+    const int choice = dialog.exec();
+    if (choice == Neighbours)
+        requestAdvert(false);
+    else if (choice == Mesh)
+        requestAdvert(true);
 }
 
 void MainWindow::showAddMenu() {
@@ -651,6 +733,7 @@ void MainWindow::buildUi() {
     connect(nodePane_, &NodePane::disconnectRequested, client_, &proto::CompanionClient::stop);
     connect(nodePane_, &NodePane::contactsRequested, this, &MainWindow::showContacts);
     connect(nodePane_, &NodePane::advertRequested, this, &MainWindow::requestAdvert);
+    connect(nodePane_, &NodePane::configRequested, this, &MainWindow::showNodeConfig);
     connect(addButton_, &QToolButton::clicked, this, &MainWindow::showAddMenu);
     connect(shareChannelButton_, &QToolButton::clicked, this, &MainWindow::shareCurrentChannel);
     connect(removeButton_, &QToolButton::clicked, this, &MainWindow::removeCurrentConversation);
@@ -1501,6 +1584,18 @@ void MainWindow::onStateChanged(proto::CompanionClient::State state, const QStri
     nodePane_->setConnection(label, color, client_->isRunning(), state == State::Ready);
     updateInputState();
     updateConversationActions();
+
+    // A fresh coreletd has no frequency until an app gives it one, and sits
+    // radio-silent until then, as a new MeshCore radio waits for its phone to
+    // choose a preset. Ready is the first moment a save can go anywhere.
+    // Deferred out of the client's own signal: a modal window run from inside
+    // it would take further frames while the one that got us here is still
+    // being handled.
+    if (state == State::Ready && !presetPrompted_ && client_->device().pubkey.size() == 32 &&
+        client_->device().freqMhz <= 0) {
+        presetPrompted_ = true;
+        QTimer::singleShot(0, this, &MainWindow::showNodeConfig);
+    }
 }
 
 void MainWindow::onDeviceInfo(const proto::CompanionClient::DeviceInfo& info) {

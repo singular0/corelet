@@ -97,6 +97,24 @@ int main() {
                "an emoji past the field is four bytes over"))
         return 1;
 
+    // --- a node's name shares its advert with the position -----------------
+    // Worked out from the advert rather than from the constants: a flags byte,
+    // eight bytes of position when there is one, and the name filling the rest
+    // of MeshCore's 32.
+    const auto advertSize = [](const QString& name, bool withPosition) {
+        return 1 + (withPosition ? 8 : 0) + proto::utf8Bytes(name);
+    };
+    const int alone = proto::maxAdvertNameBytes(false);
+    const int beside = proto::maxAdvertNameBytes(true);
+    if (!check(alone == 31 && beside == 23, "31 bytes of name alone, 23 beside a position") ||
+        !check(advertSize(QString(alone, QLatin1Char('n')), false) == 32,
+               "a name at its budget fills the advert exactly") ||
+        !check(advertSize(QString(beside, QLatin1Char('n')), true) == 32,
+               "and so does one beside a position") ||
+        !check(proto::utf8Bytes(repeatToBytes(QString::fromUtf8("ж"), beside)) == 22,
+               "23 bytes hold eleven Cyrillic letters, with a byte to spare"))
+        return 1;
+
     // --- clamping keeps what fits and cuts between characters ---------------
     const auto clamp = proto::clampToUtf8Bytes;
     if (!check(clamp(QStringLiteral("hello"), 5) == QStringLiteral("hello"),
