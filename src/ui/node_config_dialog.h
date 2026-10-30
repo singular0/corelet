@@ -10,6 +10,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QTabWidget;
 
 // The node as it describes itself and as an app may change it, in one window:
 // every value somebody can change here is also one they open it to read, and two
@@ -42,8 +43,8 @@ private:
     using SettingsChange = proto::CompanionClient::SettingsChange;
     using SettingsResult = proto::CompanionClient::SettingsResult;
 
-    QLayout* buildNodeColumn();
-    QLayout* buildRadioColumn();
+    QWidget* buildNodeTab();
+    QWidget* buildRadioTab();
 
     // Puts what the node reports into the fields, one group per command, so a
     // save that partly failed can refresh what took and leave the rest.
@@ -86,6 +87,7 @@ private:
     QString failure_;
 
     QLabel* banner_ = nullptr;
+    QTabWidget* tabs_ = nullptr;
     QLineEdit* name_ = nullptr;
     QLabel* battery_ = nullptr;
     QCheckBox* position_ = nullptr;

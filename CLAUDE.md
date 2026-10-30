@@ -458,8 +458,8 @@ tight lines rather than the three a desktop client would spend.
   one action there that puts something on the air, and the uConsole's input is a trackball.
 - The node header's gear opens `NodeConfigDialog`, which is the node's information window and its
   settings at once: every value somebody can change there is also one they open it to read, and
-  two windows showing the same name and frequency would drift. Its two columns, node and radio,
-  sit side by side because the panel is short and wide. A Save sends only what differs and then
+  two windows showing the same name and frequency would drift. Node and Radio are tabs, so the
+  window is only as wide as the public key and as tall as the radio's eight rows. A Save sends only what differs and then
   shows what the node reports; a change that did not take keeps what was typed, so it can be put
   right rather than retyped. A preset that the fields still match stays chosen even where another
   preset is identical — somebody who picked Brazil should not see it turn into Australia. The

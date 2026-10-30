@@ -10,7 +10,6 @@
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QGuiApplication>
-#include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -18,6 +17,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStringList>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -103,32 +103,13 @@ QString settingName(Setting setting) {
     return {};
 }
 
-// The section titles the node pane uses for its own, so the two read as the
-// same node.
-QLabel* heading(const QString& text, const QFont& base) {
-    auto* label = new QLabel(text);
-    QFont font = theme::secondaryFont(base);
-    font.setBold(true);
-    font.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
-    label->setFont(font);
-    label->setStyleSheet(QStringLiteral("color: %1;").arg(theme::TextMuted.name()));
-    return label;
-}
-
-QFormLayout* formLayout() {
-    auto* layout = new QFormLayout;
-    layout->setContentsMargins(0, 0, 0, 0);
+// One tab's fields, inset from the pane's border the way the connect dialog's
+// tabs are.
+QFormLayout* tabForm(QWidget* tab) {
+    auto* layout = new QFormLayout(tab);
+    layout->setContentsMargins(12, 10, 12, 10);
     layout->setSpacing(6);
     layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    return layout;
-}
-
-QVBoxLayout* column(QLabel* title, QFormLayout* fields) {
-    auto* layout = new QVBoxLayout;
-    layout->setSpacing(6);
-    layout->addWidget(title);
-    layout->addLayout(fields);
-    layout->addStretch(1);
     return layout;
 }
 
@@ -162,18 +143,20 @@ NodeConfigDialog::NodeConfigDialog(proto::CompanionClient* client, QWidget* pare
     connect(buttons, &QDialogButtonBox::accepted, this, &NodeConfigDialog::save);
     connect(buttons, &QDialogButtonBox::rejected, this, &NodeConfigDialog::reject);
 
-    // Side by side rather than stacked: the panel is 480 rows high and 1280
-    // wide, and the radio's eight rows under the node's six would not fit it.
-    auto* columns = new QHBoxLayout;
-    columns->setSpacing(24);
-    columns->addLayout(buildNodeColumn(), 1);
-    columns->addLayout(buildRadioColumn());
+    // Tabs rather than the two side by side: the window is then only as wide
+    // as the public key and as tall as the radio's eight rows, where columns
+    // made it the width of both and the radio column a long way from the key
+    // the eye starts at. The panel is 480 rows high, so stacking them was
+    // never an option.
+    tabs_ = new QTabWidget;
+    tabs_->addTab(buildNodeTab(), QStringLiteral("Node"));
+    tabs_->addTab(buildRadioTab(), QStringLiteral("Radio"));
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 10, 12, 10);
+    layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
     layout->addWidget(banner_);
-    layout->addLayout(columns);
+    layout->addWidget(tabs_);
     layout->addWidget(note_);
     layout->addWidget(error_);
     layout->addWidget(buttons);
@@ -197,10 +180,15 @@ NodeConfigDialog::NodeConfigDialog(proto::CompanionClient* client, QWidget* pare
 
     load(baseline_);
     ui::lockDialogSize(*this, *layout, 0);
-    if (baseline_.freqMhz <= 0) preset_->setFocus(Qt::OtherFocusReason);
+    // A node with no frequency is why the window opened by itself, so it opens
+    // on the answer.
+    if (baseline_.freqMhz <= 0) {
+        tabs_->setCurrentIndex(tabs_->indexOf(preset_->parentWidget()));
+        preset_->setFocus(Qt::OtherFocusReason);
+    }
 }
 
-QLayout* NodeConfigDialog::buildNodeColumn() {
+QWidget* NodeConfigDialog::buildNodeTab() {
     name_ = new QLineEdit;
     // The most the advert can ever carry. Beside a position it carries less,
     // which inputError() says rather than cutting what was already typed when
@@ -237,7 +225,8 @@ QLayout* NodeConfigDialog::buildNodeColumn() {
     latitude_ = decimalField(-90.0, 90.0, 6, QStringLiteral("Degrees north"));
     longitude_ = decimalField(-180.0, 180.0, 6, QStringLiteral("Degrees east"));
 
-    QFormLayout* fields = formLayout();
+    auto* tab = new QWidget;
+    QFormLayout* fields = tabForm(tab);
     fields->addRow(QStringLiteral("Name"), name_);
     fields->addRow(QStringLiteral("Public key"), publicKey);
     fields->addRow(QStringLiteral("Battery"), battery_);
@@ -252,10 +241,10 @@ QLayout* NodeConfigDialog::buildNodeColumn() {
     for (QLineEdit* field : {latitude_, longitude_})
         connect(field, &QLineEdit::textEdited, this, &NodeConfigDialog::edited);
 
-    return column(heading(QStringLiteral("NODE"), font()), fields);
+    return tab;
 }
 
-QLayout* NodeConfigDialog::buildRadioColumn() {
+QWidget* NodeConfigDialog::buildRadioTab() {
     preset_ = new QComboBox;
     for (int i = 0; i < int(std::size(model::RadioPresets)); i++)
         preset_->addItem(QString::fromUtf8(model::RadioPresets[i].title), i);
@@ -290,7 +279,8 @@ QLayout* NodeConfigDialog::buildRadioColumn() {
 
     repeat_ = new QCheckBox(QStringLiteral("Relay other nodes' traffic"));
 
-    QFormLayout* fields = formLayout();
+    auto* tab = new QWidget;
+    QFormLayout* fields = tabForm(tab);
     fields->addRow(QStringLiteral("Region"), preset_);
     fields->addRow(QStringLiteral("Frequency (MHz)"), frequency_);
     fields->addRow(QStringLiteral("Bandwidth"), bandwidth_);
@@ -311,7 +301,7 @@ QLayout* NodeConfigDialog::buildRadioColumn() {
     connect(txPower_, &QSpinBox::valueChanged, this, &NodeConfigDialog::edited);
     connect(airtime_, &QComboBox::activated, this, &NodeConfigDialog::edited);
 
-    return column(heading(QStringLiteral("RADIO"), font()), fields);
+    return tab;
 }
 
 // ---------------------------------------------------------------------------
